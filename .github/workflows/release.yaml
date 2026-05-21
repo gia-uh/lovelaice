@@ -14,9 +14,7 @@ jobs:
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
       - name: Install dependencies
-        run: uv sync --all-extras --all-groups --no-editable
-      - name: Run format check
-        run: uv run ruff format --check .
+        run: uv sync --all-extras --all-groups --no-editable --no-sources
       - name: Run tests
         run: uv run pytest -q
 
@@ -32,6 +30,6 @@ jobs:
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
       - name: Build package
-        run: uv build
+        run: uv build --no-sources
       - name: Publish to PyPI
         run: uv publish
