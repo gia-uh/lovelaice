@@ -1,3 +1,15 @@
+## 2.0.3 — 2026-05-21
+
+### Added
+
+- HTTP MCP transport in `lovelaice.mcp`. The same `mcpServers` config
+  shape now dispatches on `url` (HTTP) vs `command`+`args` (stdio).
+  `{"name": "...", "url": "http://...", "auth": {"bearer": "..."}}`
+  connects to an HTTP MCP server via the `mcp` SDK's `streamable_http`
+  client. Existing stdio path unchanged.
+- Release CI workflow (`.github/workflows/release.yaml`) that publishes
+  to PyPI on every GitHub Release using OIDC trusted publishing.
+
 ## 2.0.0 — 2026-05-21
 
 ### Breaking
