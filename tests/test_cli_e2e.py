@@ -19,6 +19,9 @@ would be brittle.
 """
 from __future__ import annotations
 
+import pytest
+pytest.skip("legacy CLI removed in VS1; will be cleaned up in VS2", allow_module_level=True)
+
 import json
 import os
 import subprocess

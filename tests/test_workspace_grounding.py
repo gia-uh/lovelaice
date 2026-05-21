@@ -32,6 +32,7 @@ def test_find_config_file_returns_none_when_absent(tmp_path: Path, monkeypatch: 
     assert find_config_file(start_path=deep) is None
 
 
+@pytest.mark.skip("legacy CLI removed in VS1; will be cleaned up in VS2")
 def test_cli_exits_when_no_config(tmp_path: Path) -> None:
     """Running `lovelaice` from a directory with no ancestor .lovelaice.py
     exits 1 with a helpful message."""
