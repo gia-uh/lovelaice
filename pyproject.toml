@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "lingo-ai>=1.5.0",
+    "lingo-ai>=2.0.0,<3.0",
     "python-dotenv>=1.2.1",
     "rich>=14.2.0",
     "typer>=0.21.1",
