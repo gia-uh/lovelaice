@@ -45,6 +45,8 @@ def _serialize_message(msg: Message) -> dict:
             {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
             for tc in msg.tool_calls
         ]
+    if msg.tool_call_id:
+        entry["tool_call_id"] = msg.tool_call_id
     if msg.thinking:
         entry["thinking"] = msg.thinking
     if msg.stop_reason:
@@ -68,6 +70,7 @@ def _deserialize_message(entry: dict) -> Message:
         role=role,
         content=content,
         tool_calls=tool_calls,
+        tool_call_id=entry.get("tool_call_id"),
         thinking=entry.get("thinking"),
         stop_reason=entry.get("stop_reason"),
     )

@@ -74,13 +74,15 @@ class ReActNative:
             results = await harness.execute_tools_batch(assistant.tool_calls)
             for call, result in zip(assistant.tool_calls, results):
                 # Append a tool-role lingo.Message with the textual content.
+                # tool_call_id is required by the OpenAI API to correlate the
+                # tool result with the tool call in the assistant message.
                 content_text = (
                     result.content[0]["text"]
                     if result.content and isinstance(result.content[0], dict)
                        and "text" in result.content[0]
                     else ""
                 )
-                session.append(Message.tool(content_text))
+                session.append(Message.tool(content_text, tool_call_id=call.id))
 
             if results and all(r.terminate for r in results):
                 harness.emit(TurnEnd(stop_reason=StopReason.END_TURN,
