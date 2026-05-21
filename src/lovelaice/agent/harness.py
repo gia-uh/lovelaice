@@ -74,3 +74,66 @@ class Harness:
             if res is not None:
                 messages, tools = res
         return await self.llm.chat(messages, tools=tools)
+
+    async def execute_tool(self, call) -> "Any":
+        """Run one tool call end-to-end.
+
+        Flow: unknown-tool guard → tool_call hook chain (Block → is_error stub)
+        → argument validation (failure → is_error stub) → emit ToolExecutionStart
+        → run → emit ToolExecutionEnd → observational tool_result hook → return ToolResult.
+        """
+        # Late imports to avoid circular import on package load.
+        from lovelaice.agent.tools import ToolResult, validate_args
+        from lovelaice.agent.hooks import Block
+        from lovelaice.agent.events import ToolExecutionStart, ToolExecutionEnd
+
+        tool = self.tools.get(call.name)
+        if tool is None:
+            return ToolResult.from_value(
+                f"unknown tool: {call.name}", is_error=True)
+
+        # Permission hook chain.
+        decision = await self.hooks.reduce_tool_call(call)
+        if isinstance(decision, Block):
+            return ToolResult.from_value(decision.reason, is_error=True)
+
+        # Argument validation.
+        validated = validate_args(tool, call.arguments or {})
+        if isinstance(validated, str):
+            return ToolResult.from_value(validated, is_error=True)
+
+        self.emit(ToolExecutionStart(
+            call_id=call.id, name=call.name, args=validated))
+
+        try:
+            raw = await tool.inner.run(**validated)
+            result = ToolResult.from_value(raw, raw_output=raw)
+        except BaseException as exc:
+            result = ToolResult.from_exception(exc)
+
+        self.emit(ToolExecutionEnd(
+            call_id=call.id, result=result, is_error=result.is_error))
+
+        # Observational hook.
+        await self.hooks.emit("tool_result", call, result)
+        return result
+
+    async def execute_tools_batch(self, calls: list) -> list:
+        """Dispatch a batch of tool calls.
+
+        - Empty list → empty list.
+        - If any tool in the batch is sequential, runs the whole batch in
+          source order serially.
+        - Otherwise runs concurrently and returns results in source order.
+        """
+        if not calls:
+            return []
+        names = [c.name for c in calls]
+        if self.tools.any_sequential(names):
+            out = []
+            for c in calls:
+                out.append(await self.execute_tool(c))
+            return out
+        # Parallel — gather preserves task-creation order.
+        tasks = [asyncio.create_task(self.execute_tool(c)) for c in calls]
+        return await asyncio.gather(*tasks)

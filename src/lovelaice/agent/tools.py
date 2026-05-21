@@ -130,3 +130,32 @@ class ToolRegistry:
             if t is not None and t.sequential:
                 return True
         return False
+
+
+# --- Argument validation helpers ---
+
+from pydantic import BaseModel, ValidationError, create_model  # noqa: E402
+
+
+def build_arg_model(tool: AgentTool) -> type[BaseModel]:
+    """Build a Pydantic model matching the tool's parameter schema.
+
+    Reuses lingo's Tool.parameters() (name → type dict) to build a
+    Pydantic model whose fields are all required."""
+    params = tool.inner.parameters()
+    fields = {name: (ptype, ...) for name, ptype in params.items()}
+    return create_model(f"{tool.name}_args", **fields)
+
+
+def validate_args(tool: AgentTool, args: dict) -> dict | str:
+    """Validate the LLM-supplied args against the tool's schema.
+
+    Returns:
+        - dict: the validated/coerced args dict if valid
+        - str: an error message string if validation failed
+    """
+    try:
+        model_cls = build_arg_model(tool)
+        return model_cls(**args).model_dump()
+    except ValidationError as e:
+        return f"argument validation failed: {e}"
