@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from contextlib import asynccontextmanager
 from typing import Any
 
 from lingo.tools import Tool
@@ -24,6 +25,70 @@ except ImportError:  # pragma: no cover
     ClientSession = None  # type: ignore[assignment]
     stdio_client = None  # type: ignore[assignment]
     StdioServerParameters = None  # type: ignore[assignment]
+
+try:
+    from mcp.client.streamable_http import streamablehttp_client
+except ImportError:  # pragma: no cover
+    streamablehttp_client = None  # type: ignore[assignment]
+
+
+class MCPTransportError(RuntimeError):
+    """Raised when the HTTP transport encounters an unrecoverable error."""
+
+
+@asynccontextmanager
+async def connect(config: dict):
+    """Connect to an MCP server. Dispatches on transport:
+        - {"url": ...}      -> HTTP MCP (streamable_http)
+        - {"command": ...}  -> stdio MCP
+    Yields an initialized ClientSession.
+    """
+    if "url" in config:
+        async with _http_session(config) as session:
+            yield session
+    elif "command" in config:
+        async with _stdio_session(config) as session:
+            yield session
+    else:
+        raise ValueError(f"unrecognized MCP config: {config!r}")
+
+
+@asynccontextmanager
+async def _http_session(config: dict):
+    url = config["url"]
+    headers: dict[str, str] = {}
+    if (auth := config.get("auth")) and (bearer := auth.get("bearer")):
+        headers["Authorization"] = f"Bearer {bearer}"
+    if streamablehttp_client is None:
+        raise RuntimeError("mcp.client.streamable_http not available")
+    try:
+        async with streamablehttp_client(url, headers=headers) as (
+            read_stream,
+            write_stream,
+            _get_session_id,
+        ):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                yield session
+    except Exception as exc:
+        raise MCPTransportError(
+            f"HTTP MCP transport error for {url}: {exc}"
+        ) from exc
+
+
+@asynccontextmanager
+async def _stdio_session(config: dict):
+    if ClientSession is None or stdio_client is None:
+        raise RuntimeError("mcp Python SDK not installed")
+    params = StdioServerParameters(
+        command=config["command"],
+        args=config.get("args", []),
+        env=config.get("env"),
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            yield session
 
 
 _PYTHON_TYPE_FROM_JSON: dict[str, type] = {
