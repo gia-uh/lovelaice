@@ -1,120 +1,106 @@
+"""Lovelaice CLI entrypoint.
+
+Standalone: `lovelaice "prompt"` runs one prompt through the new engine
+via an in-process ACP client. ACP server mode is invoked via
+`lovelaice-acp` (see lovelaice.acp.__main__).
+
+Host module selection: VS1 only supports the coding host. Future hosts
+will be selectable via `--host` or env var.
+"""
 import asyncio
-import inspect
 import os
+import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import typer
-from dotenv import load_dotenv
-from typing_extensions import Annotated
+from rich.console import Console
 
-from .config import find_config_file
-
-load_dotenv()
-
-app = typer.Typer(
-    name="lovelaice",
-    help="A local-first coding agent for the terminal.",
-    no_args_is_help=False,
-)
+from lovelaice.acp.client import InProcessAcpClient
+from lovelaice.acp.server import AcpServer
+from lovelaice.acp.protocol import JsonRpcNotification
+from lovelaice.agent.errors import StopReason
 
 
-@app.callback(invoke_without_command=True)
+app = typer.Typer(add_completion=False, no_args_is_help=False)
+console = Console()
+
+
+async def run_one_shot(
+    *,
+    prompt: str,
+    model: str,
+    session_path: Path,
+    cwd: str,
+) -> StopReason:
+    """Run one prompt through the engine via the in-process ACP client.
+
+    Prints the assistant text via Rich; tool calls/results render dimmed.
+    """
+    # Late import — coding host module may not exist at import time on
+    # partial installs. This is the seam where host selection lives.
+    from lovelaice.coding.host import create_coding_agent
+
+    def agent_factory():
+        return create_coding_agent(
+            model=model, session_path=session_path, cwd=cwd)
+
+    server = AcpServer(agent_factory=agent_factory)
+    client = InProcessAcpClient(server)
+
+    def on_notification(n: JsonRpcNotification):
+        if n.method != "session/update":
+            return
+        p = n.params or {}
+        kind = p.get("sessionUpdate")
+        if kind == "agent_message_chunk":
+            content = p.get("content", {})
+            if content.get("type") == "text":
+                console.print(content.get("text", ""), end="")
+        elif kind == "tool_call":
+            console.print(
+                f"[dim]→ {p.get('title')}({p.get('rawInput')})[/dim]")
+        elif (kind == "tool_call_update"
+                and p.get("status") in ("completed", "failed")):
+            status_color = "green" if p["status"] == "completed" else "red"
+            console.print(f"[{status_color}]  ✓ {p['status']}[/]")
+
+    client.on_notification(on_notification)
+
+    await client.initialize()
+    sid = await client.session_new(cwd)
+    result = await client.session_prompt(sid, prompt)
+    console.print()
+    return StopReason(result["stopReason"])
+
+
+@app.command()
 def main(
-    ctx: typer.Context,
-    prompt_parts: Annotated[
-        Optional[List[str]],
-        typer.Argument(help="The task or question for the agent.", show_default=False),
-    ] = None,
-    init: Annotated[
-        bool,
-        typer.Option("--init", help="Write a starter .lovelaice.py in the current directory."),
-    ] = False,
-    model: Annotated[
-        Optional[str],
-        typer.Option("--model", "-m", help="Named model alias from .lovelaice.py."),
-    ] = None,
-    verbose: Annotated[
-        bool,
-        typer.Option("--verbose", "-v", help="Show full tool output (one-shot mode)."),
-    ] = False,
-    plain: Annotated[
-        bool,
-        typer.Option("--plain", help="Plain streaming text. Content → stdout, reasoning → stderr. No Rich."),
-    ] = False,
-    json_output: Annotated[
-        bool,
-        typer.Option("--json", help="NDJSON event stream on stdout (reasoning, content, done, error)."),
-    ] = False,
+    prompt: Optional[str] = typer.Argument(None),
+    model: str = typer.Option(
+        os.getenv("LOVELAICE_MODEL", "anthropic/claude-haiku-4-5"),
+        "--model", "-m"),
+    session_path: Optional[Path] = typer.Option(None, "--session-path"),
+    cwd: Optional[str] = typer.Option(None, "--cwd"),
 ):
-    """
-    Lovelaice — a sovereign coding agent for the terminal.
-
-    With no arguments, opens a full-screen TUI. With a prompt, runs a
-    single agentic turn and streams to stdout.
-    """
-    if init:
-        _do_init()
-        raise typer.Exit()
-
-    config_path = find_config_file()
-    if config_path is None:
-        typer.echo(
-            "No .lovelaice.py found in this directory or any ancestor. "
-            "Run `lovelaice --init` to create one.",
-            err=True,
-        )
-        raise typer.Exit(1)
-
-    # Ground the workspace: chdir to where .lovelaice.py lives, then load
-    # it by basename so any relative imports in the config see the new cwd.
-    os.chdir(config_path.parent)
-    config_path = Path(".lovelaice.py")
-
-    prompt = " ".join(prompt_parts) if prompt_parts else ""
-
-    if prompt:
-        if plain and json_output:
-            typer.echo("--plain and --json are mutually exclusive.", err=True)
+    """Lovelaice — one-shot agent CLI."""
+    if not prompt:
+        # Piped stdin?
+        if not sys.stdin.isatty():
+            prompt = sys.stdin.read().strip()
+        else:
+            typer.echo("Usage: lovelaice \"<prompt>\"")
             raise typer.Exit(1)
-        output = "json" if json_output else ("plain" if plain else "rich")
 
-        from .oneshot import run_oneshot
-        rc = asyncio.run(run_oneshot(
-            config_path,
-            model=model,
-            prompt=prompt,
-            verbose=verbose,
-            output=output,
-        ))
-        raise typer.Exit(rc)
-    else:
-        from .tui.app import run_tui
-        asyncio.run(run_tui(config_path, model=model))
+    cwd_str = cwd or os.getcwd()
+    if session_path is None:
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        session_path = Path.home() / ".lovelaice" / "sessions" / f"{ts}.jsonl"
 
-
-def _do_init() -> None:
-    config_path = Path(".lovelaice.py")
-    if config_path.exists():
-        typer.echo(f"{config_path} already exists.", err=True)
-        raise typer.Exit(code=1)
-
-    default_model = typer.prompt(
-        "Default model name", default="google/gemini-2.5-flash"
-    )
-    base_url = typer.prompt(
-        "OpenRouter API base URL", default="https://openrouter.ai/api/v1"
-    )
-
-    from lovelaice import template
-
-    source = inspect.getsource(template)
-    formatted = source.replace("<default_model>", default_model).replace(
-        "<base_url>", base_url
-    )
-    config_path.write_text(formatted)
-    typer.echo(f"Wrote {config_path} (default model: {default_model}).")
-    typer.echo("Set OPENROUTER_API_KEY in your environment before running lovelaice.")
+    stop = asyncio.run(run_one_shot(
+        prompt=prompt, model=model, session_path=session_path, cwd=cwd_str))
+    raise typer.Exit(0 if stop == StopReason.END_TURN else 1)
 
 
 if __name__ == "__main__":
