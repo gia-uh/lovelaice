@@ -1,0 +1,114 @@
+import pytest
+from unittest.mock import AsyncMock
+from lingo.llm import Message, ToolCall
+from lingo.tools import tool as lingo_tool
+from lovelaice.agent.tools import AgentTool, ToolRegistry
+from lovelaice.agent.hooks import HookRegistry
+from lovelaice.agent.harness import Harness
+from lovelaice.agent.session import Session
+from lovelaice.agent.loops.react_native import ReActNative
+from lovelaice.agent.errors import StopReason
+
+
+@lingo_tool
+async def echo(text: str) -> str:
+    """Echo."""
+    return text
+
+
+def _make_harness(mock_llm, tools=None):
+    reg = ToolRegistry()
+    for t in tools or []:
+        reg.register(t)
+    return Harness(llm=mock_llm, tools=reg, hooks=HookRegistry(),
+                   system_prompt="SYS")
+
+
+@pytest.mark.asyncio
+async def test_react_native_one_tool_then_text(tmp_path):
+    """Canary #2 — mocked LLM emits one tool call, then plain text.
+    Harness dispatches the tool, second LLM call ends the turn."""
+    responses = iter([
+        Message(role="assistant", content="", tool_calls=[
+            ToolCall(id="c1", name="echo", arguments={"text": "hello"})
+        ], stop_reason="tool_calls"),
+        Message(role="assistant", content="done.", stop_reason="stop"),
+    ])
+    mock_llm = AsyncMock()
+    mock_llm.chat = AsyncMock(side_effect=lambda *a, **kw: next(responses))
+
+    harness = _make_harness(mock_llm, tools=[AgentTool(inner=echo)])
+    sess = Session.create(tmp_path / "s.jsonl", model="x",
+                          system_prompt_hash="h", loop="ReActNative",
+                          cwd=str(tmp_path))
+
+    loop = ReActNative()
+    stop = await loop.run(harness, sess, Message.user("please"))
+
+    assert stop == StopReason.END_TURN
+    # Session should have: user, assistant(tool_calls), tool, assistant(stop)
+    msgs = sess.messages_for_llm("SYS")
+    roles = [m.role for m in msgs]
+    assert roles == ["system", "user", "assistant", "tool", "assistant"]
+
+
+@pytest.mark.asyncio
+async def test_react_native_no_tools_returns_immediately(tmp_path):
+    """LLM with no tool calls → one turn → end_turn."""
+    mock_llm = AsyncMock()
+    mock_llm.chat = AsyncMock(return_value=Message.assistant("hello", stop_reason="stop"))
+
+    harness = _make_harness(mock_llm)
+    sess = Session.create(tmp_path / "s.jsonl", model="x",
+                          system_prompt_hash="h", loop="ReActNative",
+                          cwd=str(tmp_path))
+
+    stop = await ReActNative().run(harness, sess, Message.user("hi"))
+    assert stop == StopReason.END_TURN
+
+    msgs = sess.messages_for_llm("SYS")
+    assert [m.role for m in msgs] == ["system", "user", "assistant"]
+
+
+@pytest.mark.asyncio
+async def test_react_native_emits_turn_start_and_end_events(tmp_path):
+    mock_llm = AsyncMock()
+    mock_llm.chat = AsyncMock(return_value=Message.assistant("hi", stop_reason="stop"))
+    harness = _make_harness(mock_llm)
+    events = []
+    harness.subscribe(lambda ev: events.append(ev))
+    sess = Session.create(tmp_path / "s.jsonl", model="x",
+                          system_prompt_hash="h", loop="ReActNative",
+                          cwd=str(tmp_path))
+    await ReActNative().run(harness, sess, Message.user("hi"))
+    types = [type(e).__name__ for e in events]
+    assert "TurnStart" in types
+    assert "TurnEnd" in types
+    assert "AssistantMessageFinalized" in types
+
+
+@pytest.mark.asyncio
+async def test_react_native_aborts_if_signal_set(tmp_path):
+    """If harness.abort is set before/during the loop, returns CANCELLED."""
+    import asyncio
+    mock_llm = AsyncMock()
+    mock_llm.chat = AsyncMock(return_value=Message.assistant("hi", stop_reason="stop"))
+    harness = _make_harness(mock_llm)
+    harness.abort.set()  # set BEFORE the loop starts
+    sess = Session.create(tmp_path / "s.jsonl", model="x",
+                          system_prompt_hash="h", loop="ReActNative",
+                          cwd=str(tmp_path))
+    stop = await ReActNative().run(harness, sess, Message.user("hi"))
+    assert stop == StopReason.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_react_native_maps_stop_reason_length_to_max_tokens(tmp_path):
+    mock_llm = AsyncMock()
+    mock_llm.chat = AsyncMock(return_value=Message.assistant("hi", stop_reason="length"))
+    harness = _make_harness(mock_llm)
+    sess = Session.create(tmp_path / "s.jsonl", model="x",
+                          system_prompt_hash="h", loop="ReActNative",
+                          cwd=str(tmp_path))
+    stop = await ReActNative().run(harness, sess, Message.user("hi"))
+    assert stop == StopReason.MAX_TOKENS
