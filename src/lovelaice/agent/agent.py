@@ -25,13 +25,22 @@ class AgentConfig:
     cwd: str = "."
     api_key: str | None = None
     base_url: str | None = None
+    # Cap per-turn output. Some Anthropic-via-OpenRouter models default to
+    # a very large `max_tokens` (~64K) which can exceed credit-balance caps
+    # even when the actual response would be small. None → SDK default.
+    max_tokens: int | None = None
 
 
 def _build_llm(cfg: AgentConfig) -> LLM:
     """Construct the lingo.LLM client from an AgentConfig.
 
     Exposed as a module-level function so tests can monkey-patch it."""
-    return LLM(model=cfg.model, api_key=cfg.api_key, base_url=cfg.base_url)
+    kwargs: dict = {}
+    if cfg.max_tokens is not None:
+        kwargs["max_tokens"] = cfg.max_tokens
+    return LLM(
+        model=cfg.model, api_key=cfg.api_key, base_url=cfg.base_url, **kwargs,
+    )
 
 
 class Agent:
