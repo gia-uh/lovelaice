@@ -26,6 +26,20 @@ from lovelaice.agent.events import (
 ACP_PROTOCOL_VERSION = "0.1"
 
 
+def _render_display_messages(message_entries) -> list[dict]:
+    """Render persisted MessageEntry rows into the wire-friendly DisplayMessage
+    shape — collapses tool_calls inline with the assistant message, drops
+    thinking, returns plain text per role."""
+    out: list[dict] = []
+    for m in message_entries:
+        text = m.content if isinstance(m.content, str) else str(m.content)
+        entry: dict = {"role": m.role, "text": text}
+        if m.tool_calls:
+            entry["tool_calls"] = m.tool_calls
+        out.append(entry)
+    return out
+
+
 class AcpServer:
     """ACP-compliant agent server.
 
@@ -35,9 +49,11 @@ class AcpServer:
     JSON-RPC request/notification routing.
     """
 
-    def __init__(self, *, agent_factory: Callable):
+    def __init__(self, *, agent_factory: Callable, conversation_store=None):
         self._agent_factory = agent_factory
+        self._store = conversation_store
         self._sessions: dict[str, Any] = {}
+        self._session_to_conversation: dict[str, str] = {}
         self._initialized = False
         self._notification_handlers: list[Callable[[JsonRpcNotification], Any]] = []
         self._current_prompt_task: asyncio.Task | None = None
@@ -105,12 +121,41 @@ class AcpServer:
                     "code": -32002, "message": "agent not initialized"})
 
             if req.method == "session/new":
+                params = req.params or {}
+                given_cid = params.get("conversationId")
+                conv = None
+                messages: list[dict] = []
+                if self._store is not None:
+                    if given_cid is None:
+                        conv = await self._store.create(
+                            model="unknown",
+                            system_prompt_hash="sha256:unknown",
+                        )
+                    else:
+                        conv = await self._store.get(given_cid)
+                        if conv is None:
+                            return JsonRpcResponse(id=req.id, error={
+                                "code": -32602,
+                                "message": f"unknown conversation: {given_cid}",
+                            })
+                        messages = _render_display_messages(conv.row.messages)
                 sid = uuid.uuid4().hex[:8]
-                agent = self._agent_factory()
+                if conv is not None:
+                    try:
+                        agent = self._agent_factory(conversation=conv)
+                    except TypeError:
+                        agent = self._agent_factory()
+                    self._session_to_conversation[sid] = conv.id
+                else:
+                    agent = self._agent_factory()
                 agent.subscribe(
                     lambda ev, sid=sid: self._agent_event_to_notification(sid, ev))
                 self._sessions[sid] = agent
-                return JsonRpcResponse(id=req.id, result={"sessionId": sid})
+                result: dict[str, Any] = {"sessionId": sid}
+                if conv is not None:
+                    result["conversationId"] = conv.id
+                    result["messages"] = messages
+                return JsonRpcResponse(id=req.id, result=result)
 
             if req.method == "session/prompt":
                 params = req.params or {}
@@ -141,10 +186,18 @@ class AcpServer:
             })
 
     async def handle_notification(self, n: JsonRpcNotification) -> None:
-        """Handle inbound notifications (currently: session/cancel only)."""
+        """Handle inbound notifications (session/cancel, conversation/archive)."""
         if n.method == "session/cancel":
             if self._current_prompt_task and not self._current_prompt_task.done():
                 self._current_prompt_task.cancel()
+            return
+        if n.method == "conversation/archive":
+            if self._store is None:
+                return
+            cid = (n.params or {}).get("conversationId")
+            if cid:
+                await self._store.archive(cid)
+            return
 
     async def run_stdio(self) -> None:
         """Read JSON-RPC lines from stdin; write responses + notifications to stdout."""

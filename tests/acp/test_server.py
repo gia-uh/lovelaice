@@ -121,3 +121,87 @@ async def test_unknown_method_returns_error(monkeypatch, tmp_path):
         JsonRpcRequest(id=2, method="some/unknown", params={}))
     assert resp.error is not None
     assert "method not found" in resp.error["message"].lower()
+
+
+# ---------------- Conversation persistence (Task 4) ----------------
+
+import pytest_asyncio
+from pathlib import Path
+from beaver import AsyncBeaverDB
+from lovelaice.agent.conversation import ConversationStore
+
+
+def _stub_agent_factory(*args, **kwargs):
+    class _StubAgent:
+        async def prompt(self, text):
+            from lovelaice.agent.errors import StopReason
+            return StopReason.END_TURN
+        def subscribe(self, fn):
+            pass
+    return _StubAgent()
+
+
+@pytest_asyncio.fixture
+async def conv_store(tmp_path: Path):
+    db = AsyncBeaverDB(str(tmp_path / "lovelaice.db"))
+    await db.connect()
+    try:
+        yield ConversationStore(db)
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_session_new_without_conversation_id_mints_one(conv_store):
+    server = AcpServer(agent_factory=_stub_agent_factory, conversation_store=conv_store)
+    await server.handle_request(
+        JsonRpcRequest(id=1, method="initialize", params={}))
+    resp = await server.handle_request(
+        JsonRpcRequest(id=2, method="session/new", params={}))
+    body = resp.result
+    assert "sessionId" in body
+    assert "conversationId" in body
+    assert isinstance(body["conversationId"], str) and len(body["conversationId"]) > 0
+    assert body.get("messages") == []
+
+
+@pytest.mark.asyncio
+async def test_session_new_with_known_conversation_id_returns_messages(conv_store):
+    conv = await conv_store.create(model="m", system_prompt_hash="h")
+    await conv_store.append(conv.id, Message.user("hi from yesterday"))
+    server = AcpServer(agent_factory=_stub_agent_factory, conversation_store=conv_store)
+    await server.handle_request(
+        JsonRpcRequest(id=1, method="initialize", params={}))
+    resp = await server.handle_request(
+        JsonRpcRequest(id=2, method="session/new",
+                       params={"conversationId": conv.id}))
+    body = resp.result
+    assert body["conversationId"] == conv.id
+    assert len(body["messages"]) >= 1
+    assert body["messages"][0]["role"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_session_new_with_unknown_conversation_id_errors(conv_store):
+    server = AcpServer(agent_factory=_stub_agent_factory, conversation_store=conv_store)
+    await server.handle_request(
+        JsonRpcRequest(id=1, method="initialize", params={}))
+    resp = await server.handle_request(
+        JsonRpcRequest(id=2, method="session/new",
+                       params={"conversationId": "no-such-id"}))
+    assert resp.error is not None
+    assert "unknown conversation" in resp.error["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_conversation_archive_flips_flag(conv_store):
+    conv = await conv_store.create(model="m", system_prompt_hash="h")
+    server = AcpServer(agent_factory=_stub_agent_factory, conversation_store=conv_store)
+    await server.handle_request(
+        JsonRpcRequest(id=1, method="initialize", params={}))
+    await server.handle_notification(JsonRpcNotification(
+        method="conversation/archive",
+        params={"conversationId": conv.id}))
+    fresh = await conv_store.get(conv.id)
+    assert fresh is not None
+    assert fresh.archived is True
