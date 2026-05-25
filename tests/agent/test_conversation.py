@@ -99,3 +99,35 @@ async def test_list_filters_archived(store: ConversationStore):
     arch = await store.list(archived=True)
     assert {m.id for m in live} == {b.id}
     assert {m.id for m in arch} == {a.id}
+
+
+@pytest.mark.asyncio
+async def test_agent_from_conversation_seeds_messages(tmp_path: Path):
+    """Agent built from a conversation with prior messages includes them in
+    its first LLM call's message list."""
+    from lovelaice.agent import Agent, AgentConfig
+    from lovelaice.agent.loops.react_native import ReActNative
+
+    db = AsyncBeaverDB(str(tmp_path / "lovelaice.db"))
+    await db.connect()
+    try:
+        store = ConversationStore(db)
+        conv = await store.create(model="anthropic/claude-haiku-4-5", system_prompt_hash="h")
+        await store.append(conv.id, Message.user("prior question"))
+        await store.append(conv.id, Message.assistant("prior answer"))
+
+        config = AgentConfig(
+            model="anthropic/claude-haiku-4-5",
+            system_prompt="be helpful",
+            cwd=str(tmp_path),
+            api_key="fake",
+        )
+        conv = await store.get(conv.id)
+        agent = Agent.from_conversation(
+            config=config, tools=[], loop=ReActNative(), conversation=conv, store=store,
+        )
+        msgs = agent.messages_for_llm()
+        roles = [m.role for m in msgs]
+        assert roles == ["system", "user", "assistant"]
+    finally:
+        await db.close()
