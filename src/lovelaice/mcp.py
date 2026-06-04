@@ -59,6 +59,12 @@ async def _http_session(config: dict):
     headers: dict[str, str] = {}
     if (auth := config.get("auth")) and (bearer := auth.get("bearer")):
         headers["Authorization"] = f"Bearer {bearer}"
+    # Per-server extra headers — used by warden to pass scoping keys like
+    # X-Peacock-Conversation. Plain dict merge; "auth.bearer" wins for
+    # Authorization since it ran first.
+    extra = config.get("headers") or {}
+    for k, v in extra.items():
+        headers.setdefault(k, v)
     if streamablehttp_client is None:
         raise RuntimeError("mcp.client.streamable_http not available")
     try:

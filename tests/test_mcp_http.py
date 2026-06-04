@@ -67,3 +67,39 @@ async def test_http_mcp_with_bearer_auth(http_mcp_url):
     ) as session:
         tools = await session.list_tools()
         assert len(tools.tools) >= 2
+
+
+@pytest.mark.asyncio
+async def test_http_mcp_forwards_extra_headers(monkeypatch):
+    """`config["headers"]` extends the per-request header dict that the
+    streamable_http client sees — used by warden to pass scoping keys like
+    X-Peacock-Conversation through to the downstream MCP server."""
+    captured: dict[str, dict[str, str]] = {}
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _fake_streamablehttp_client(url, headers=None):
+        captured["url"] = url
+        captured["headers"] = dict(headers or {})
+        raise RuntimeError("stop-before-real-connect")
+        yield  # pragma: no cover — required for asynccontextmanager typing
+
+    from lovelaice import mcp as _mcp_mod
+
+    monkeypatch.setattr(_mcp_mod, "streamablehttp_client", _fake_streamablehttp_client)
+
+    with pytest.raises(_mcp_mod.MCPTransportError):
+        async with _mcp_mod.connect(
+            {
+                "name": "peacock",
+                "url": "http://peacock.ainbox.local:8001/mcp",
+                "auth": {"bearer": "svc-token"},
+                "headers": {"X-Peacock-Conversation": "conv-abc"},
+            }
+        ) as _:
+            pass
+
+    assert captured["url"] == "http://peacock.ainbox.local:8001/mcp"
+    assert captured["headers"]["Authorization"] == "Bearer svc-token"
+    assert captured["headers"]["X-Peacock-Conversation"] == "conv-abc"
