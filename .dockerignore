@@ -1,0 +1,20 @@
+# Keep the docker build context small — exclude local venv, vcs, caches, data.
+# (Critical: .venv is platform-specific + rebuilt by uv inside the image, so
+# copying it in just bloats the layer.)
+.git
+.venv
+.cache
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+node_modules
+dist
+build
+data
+*.db
+*.db-shm
+*.db-wal
+*.tar
+.env
