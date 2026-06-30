@@ -1,3 +1,13 @@
+## 2.1.2 — 2026-06-30
+
+### Fixed
+
+- Agent loop (`ReActNative`) no longer ends the turn on an empty assistant
+  message (no tool calls and no answer text). Thinking models can return
+  reasoning-only with empty content on the continuation after a tool result;
+  the turn now ends only on a genuine final answer or tool soft-termination,
+  nudging and continuing on an empty turn (bounded by `MAX_EMPTY_CONTINUATIONS`).
+
 ## 2.0.3 — 2026-05-21
 
 ### Added

@@ -1,6 +1,6 @@
 [project]
 name = "lovelaice"
-version = "2.1.1"
+version = "2.1.2"
 description = "A local-first coding agent for the terminal, with Python-defined commands and tools."
 readme = "README.md"
 authors = [
