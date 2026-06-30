@@ -91,6 +91,37 @@ def test_session_load_rejects_unsupported_schema_version(tmp_path):
         Session.load(path)
 
 
+def test_session_preserves_empty_string_tool_call_id(tmp_path):
+    """tool_call_id="" must survive the serialize→deserialize round-trip.
+
+    When a provider doesn't send an ID (lingo falls back to ""), the falsy
+    check 'if msg.tool_call_id' dropped the field from the JSONL entry.
+    On reload, tool_call_id became None, and model_dump() omitted it from the
+    wire message — causing API errors on the second LLM call. Regression for
+    the 'agent cuts after first tool call with small models' bug."""
+    path = tmp_path / "s.jsonl"
+    sess = Session.create(path, model="x", system_prompt_hash="h",
+                          loop="ReActNative", cwd=str(tmp_path))
+
+    tc = ToolCall(id="", name="bash", arguments={"cmd": "ls"})
+    sess.append(Message.assistant("", tool_calls=[tc], stop_reason="tool_calls"))
+    sess.append(Message.tool("total 0", tool_call_id=""))
+
+    sess2 = Session.load(path)
+    msgs = sess2.messages_for_llm("SYS")
+    tool_msg = msgs[2]
+    assert tool_msg.role == "tool"
+    assert tool_msg.tool_call_id == "", (
+        "empty-string tool_call_id must survive JSONL round-trip; "
+        f"got {tool_msg.tool_call_id!r}"
+    )
+    dump = tool_msg.model_dump()
+    assert "tool_call_id" in dump, (
+        "model_dump() must include tool_call_id for tool messages even if empty"
+    )
+    assert dump["tool_call_id"] == ""
+
+
 def test_session_hash_system_prompt():
     h = Session.hash_system_prompt("hello world")
     assert h.startswith("sha256:")

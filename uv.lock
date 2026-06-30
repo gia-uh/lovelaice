@@ -56,7 +56,7 @@ wheels = [
 
 [[package]]
 name = "beaver-db"
-version = "2.0rc4"
+version = "2.0rc5"
 source = { editable = "../beaver" }
 dependencies = [
     { name = "aiosqlite" },
@@ -73,6 +73,7 @@ requires-dist = [
     { name = "beaver-db", extras = ["security"], marker = "extra == 'full'" },
     { name = "cryptography", marker = "extra == 'security'", specifier = ">=46.0.3" },
     { name = "fastapi", extras = ["standard"], marker = "extra == 'remote'", specifier = ">=0.118.0" },
+    { name = "httpx", marker = "extra == 'remote'", specifier = ">=0.27.0" },
     { name = "numpy", specifier = ">=2.3.4" },
     { name = "pydantic", specifier = ">=2.12.3" },
     { name = "rich", specifier = ">=14.2.0" },
@@ -385,7 +386,7 @@ wheels = [
 
 [[package]]
 name = "lingo-ai"
-version = "2.0.2"
+version = "2.0.5"
 source = { editable = "../lingo" }
 dependencies = [
     { name = "openai" },

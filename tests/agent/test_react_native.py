@@ -103,6 +103,49 @@ async def test_react_native_aborts_if_signal_set(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_react_native_second_call_message_format(tmp_path):
+    """After a tool call, the second LLM call must receive content:null (not "")
+    for the assistant message that emitted the tool call.
+
+    Strict providers (Qwen via OpenRouter) reject content:"" on tool-calling
+    turns. This test captures the actual messages passed to the second call and
+    verifies the wire format. Regression for the 'agent cuts after first tool
+    call with small models' bug."""
+    captured: list[list] = []
+
+    async def fake_chat(messages, **kw):
+        captured.append(messages)
+        if len(captured) == 1:
+            return Message(role="assistant", content="", tool_calls=[
+                ToolCall(id="c1", name="echo", arguments={"text": "x"})
+            ], stop_reason="tool_calls")
+        return Message.assistant("done.", stop_reason="stop")
+
+    mock_llm = AsyncMock()
+    mock_llm.chat = fake_chat
+
+    harness = _make_harness(mock_llm, tools=[AgentTool(inner=echo)])
+    sess = Session.create(tmp_path / "s.jsonl", model="x",
+                          system_prompt_hash="h", loop="ReActNative",
+                          cwd=str(tmp_path))
+
+    stop = await ReActNative().run(harness, sess, Message.user("run it"))
+    assert stop == StopReason.END_TURN
+    assert len(captured) == 2, "expected exactly two LLM calls"
+
+    # The second call must include the assistant+tool_calls message.
+    second_messages = captured[1]
+    assistant_msgs = [m for m in second_messages if m.role == "assistant"]
+    assert assistant_msgs, "second call must include assistant message"
+    # Verify wire format: content must be null, not ""
+    wire = assistant_msgs[0].model_dump()
+    assert wire.get("content") is None, (
+        f"assistant message with tool_calls must have content:null in dump, "
+        f"got {wire.get('content')!r} — strict providers reject content:\"\""
+    )
+
+
+@pytest.mark.asyncio
 async def test_react_native_maps_stop_reason_length_to_max_tokens(tmp_path):
     mock_llm = AsyncMock()
     mock_llm.chat = AsyncMock(return_value=Message.assistant("hi", stop_reason="length"))

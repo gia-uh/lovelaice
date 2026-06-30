@@ -45,7 +45,7 @@ def _serialize_message(msg: Message) -> dict:
             {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
             for tc in msg.tool_calls
         ]
-    if msg.tool_call_id:
+    if msg.tool_call_id is not None:
         entry["tool_call_id"] = msg.tool_call_id
     if msg.thinking:
         entry["thinking"] = msg.thinking
