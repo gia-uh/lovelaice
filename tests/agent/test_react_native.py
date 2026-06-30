@@ -155,3 +155,52 @@ async def test_react_native_maps_stop_reason_length_to_max_tokens(tmp_path):
                           cwd=str(tmp_path))
     stop = await ReActNative().run(harness, sess, Message.user("hi"))
     assert stop == StopReason.MAX_TOKENS
+
+
+# --- empty-turn continuation: don't end the turn until there's a real answer ---
+
+
+@pytest.mark.asyncio
+async def test_react_native_empty_turn_nudges_then_real_answer(tmp_path):
+    """A thinking model may return empty content + no tool_calls (it reasoned
+    but produced no answer). The loop must NOT treat that as done — it nudges
+    and continues until a genuine final answer arrives."""
+    responses = iter([
+        Message(role="assistant", content="", stop_reason="stop"),
+        Message(role="assistant", content="You have 1 vault.", stop_reason="stop"),
+    ])
+    mock_llm = AsyncMock()
+    mock_llm.chat = AsyncMock(side_effect=lambda *a, **kw: next(responses))
+    harness = _make_harness(mock_llm)
+    sess = Session.create(tmp_path / "s.jsonl", model="x",
+                          system_prompt_hash="h", loop="ReActNative",
+                          cwd=str(tmp_path))
+
+    stop = await ReActNative().run(harness, sess, Message.user("how many vaults?"))
+
+    assert stop == StopReason.END_TURN
+    assert mock_llm.chat.await_count == 2, "loop must continue past the empty turn"
+    msgs = sess.messages_for_llm("SYS")
+    roles = [m.role for m in msgs]
+    assert roles.count("user") == 2, "a nudge user message should be injected"
+    assert roles[-1] == "assistant"
+    assert "1 vault" in (msgs[-1].content or "")
+
+
+@pytest.mark.asyncio
+async def test_react_native_empty_turn_gives_up_after_three_nudges(tmp_path):
+    """If the model never produces content, the loop must not spin forever —
+    it gives up after at most 3 nudge continuations (4 LLM calls total)."""
+    mock_llm = AsyncMock()
+    mock_llm.chat = AsyncMock(
+        side_effect=lambda *a, **kw: Message(role="assistant", content="", stop_reason="stop"))
+    harness = _make_harness(mock_llm)
+    sess = Session.create(tmp_path / "s.jsonl", model="x",
+                          system_prompt_hash="h", loop="ReActNative",
+                          cwd=str(tmp_path))
+
+    stop = await ReActNative().run(harness, sess, Message.user("hi"))
+
+    assert stop == StopReason.END_TURN
+    assert mock_llm.chat.await_count == 4, \
+        "initial empty turn + 3 nudge retries, then give up"
