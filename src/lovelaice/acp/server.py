@@ -177,6 +177,11 @@ class AcpServer:
                 stop_value = stop.value if hasattr(stop, "value") else str(stop)
                 return JsonRpcResponse(id=req.id, result={"stopReason": stop_value})
 
+            if req.method == "workflow/run":
+                params = req.params or {}
+                return JsonRpcResponse(
+                    id=req.id, result=await self._handle_workflow_run(params))
+
             return JsonRpcResponse(id=req.id, error={
                 "code": -32601, "message": f"method not found: {req.method}"})
         except Exception as e:
@@ -184,6 +189,22 @@ class AcpServer:
                 "code": -32603,
                 "message": f"internal error: {type(e).__name__}: {e}",
             })
+
+    async def _handle_workflow_run(self, params: dict) -> dict:
+        """Run a native lovelaice workflow spec, returning ``{"result": <dict>}``.
+
+        Each ``agent`` node gets a fresh agent from the same factory the ACP
+        server was built with, so tools/MCP wired by the host are available.
+        """
+        from lovelaice.workflows import WorkflowSpec, run as _run
+
+        spec = WorkflowSpec.model_validate(params["spec"])
+        result = await _run(
+            spec,
+            agent_factory=lambda: self._agent_factory(),
+            inputs=params.get("inputs"),
+        )
+        return {"result": result}
 
     async def handle_notification(self, n: JsonRpcNotification) -> None:
         """Handle inbound notifications (session/cancel, conversation/archive)."""
