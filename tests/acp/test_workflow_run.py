@@ -62,3 +62,50 @@ async def test_workflow_run_dispatch_via_handle_request(monkeypatch, tmp_path):
     )
     assert isinstance(resp, JsonRpcResponse)
     assert resp.result == {"result": {"title": "T", "generated_at": "2026-07-01", "widgets": []}}
+
+
+@pytest.mark.asyncio
+async def test_workflow_tool_node_bridges_agent_tool(monkeypatch, tmp_path):
+    from lingo.tools import tool as lingo_tool
+    from lovelaice.agent import AgentTool
+
+    written = {}
+
+    @lingo_tool
+    async def write_note(path: str, payload: dict) -> str:
+        """Write a note."""
+        written["path"] = path
+        written["payload"] = payload
+        return "ok:" + path
+
+    def make(*, conversation=None) -> Agent:
+        fake = AsyncMock()
+        fake.chat = AsyncMock(
+            return_value=Message.assistant('{"widgets": [1]}', stop_reason="stop")
+        )
+        monkeypatch.setattr("lovelaice.agent.agent._build_llm", lambda cfg: fake)
+        return Agent(
+            config=AgentConfig(model="m"),
+            tools=[AgentTool(inner=write_note)],
+            loop=ReActNative(),
+            session_path=tmp_path / "s.jsonl",
+        )
+
+    server = AcpServer(agent_factory=make)
+    out = await server._handle_workflow_run(
+        {
+            "spec": {
+                "name": "w",
+                "root": {
+                    "kind": "sequence",
+                    "children": [
+                        {"kind": "agent", "prompt": "emit", "output_schema": {}, "name": "data"},
+                        {"kind": "tool", "tool": "write_note",
+                         "args": {"path": "kpis.md", "payload": "{data}"}},
+                    ],
+                },
+            }
+        }
+    )
+    assert written == {"path": "kpis.md", "payload": {"widgets": [1]}}
+    assert out == {"result": {"tool": "write_note", "result": "ok:kpis.md"}}

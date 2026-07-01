@@ -2,14 +2,22 @@
 
 from typing import Any, Callable
 
-from lovelaice.workflows.models import AgentNode, Node, SequenceNode, WorkflowSpec
-from lovelaice.workflows.executor import run, _final_text
+from lovelaice.workflows.models import (
+    AgentNode,
+    Node,
+    SequenceNode,
+    ToolNode,
+    WorkflowSpec,
+)
+from lovelaice.workflows.executor import Handler, run, _final_text
 
 __all__ = [
     "AgentNode",
+    "ToolNode",
     "SequenceNode",
     "WorkflowSpec",
     "Node",
+    "Handler",
     "run",
     "_final_text",
     "workflow",
@@ -21,9 +29,18 @@ class _Workflow:
         self._spec = spec
 
     async def run(
-        self, *, agent_factory: Callable[[], Any], inputs: dict | None = None
+        self,
+        *,
+        agent_factory: Callable[[], Any],
+        handlers: "dict[str, Handler] | None" = None,
+        inputs: dict | None = None,
     ) -> dict:
-        return await run(self._spec, agent_factory=agent_factory, inputs=inputs)
+        return await run(
+            self._spec,
+            agent_factory=agent_factory,
+            handlers=handlers,
+            inputs=inputs,
+        )
 
 
 def workflow(spec: "dict | WorkflowSpec") -> _Workflow:

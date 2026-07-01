@@ -19,12 +19,29 @@ class AgentNode(BaseModel):
     output_schema: dict | None = None
 
 
+class ToolNode(BaseModel):
+    """Deterministically invoke a host-provided tool (no LLM).
+
+    ``tool`` names a handler the host registered (e.g. an MCP tool wired into
+    the agent, like magpie's ``write_note``). ``args`` values are templated
+    from context: a value that is exactly ``"{var}"`` is replaced by the raw
+    context object (dict/list preserved); any other string is ``str.format``-ed.
+    """
+
+    kind: Literal["tool"] = "tool"
+    tool: str
+    args: dict = Field(default_factory=dict)
+    name: str | None = None
+
+
 class SequenceNode(BaseModel):
     kind: Literal["sequence"] = "sequence"
     children: list["Node"] = Field(min_length=1)
 
 
-Node = Annotated[Union[AgentNode, SequenceNode], Field(discriminator="kind")]
+Node = Annotated[
+    Union[AgentNode, ToolNode, SequenceNode], Field(discriminator="kind")
+]
 
 
 class WorkflowSpec(BaseModel):

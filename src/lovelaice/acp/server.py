@@ -193,15 +193,26 @@ class AcpServer:
     async def _handle_workflow_run(self, params: dict) -> dict:
         """Run a native lovelaice workflow spec, returning ``{"result": <dict>}``.
 
-        Each ``agent`` node gets a fresh agent from the same factory the ACP
-        server was built with, so tools/MCP wired by the host are available.
+        ``agent`` nodes get a fresh agent from the same factory the ACP server
+        was built with. ``tool`` nodes are dispatched to handlers bridged from
+        that agent's wired tools (e.g. magpie's ``write_note`` MCP tool) — so the
+        workflow engine stays generic while the host supplies the effects.
         """
         from lovelaice.workflows import WorkflowSpec, run as _run
 
         spec = WorkflowSpec.model_validate(params["spec"])
+
+        probe = self._agent_factory()
+        handlers: dict = {}
+        for t in probe.harness.tools.all():
+            async def _handler(args, _vars, _tool=t):
+                return await _tool.inner.run(**args)
+            handlers[t.name] = _handler
+
         result = await _run(
             spec,
             agent_factory=lambda: self._agent_factory(),
+            handlers=handlers,
             inputs=params.get("inputs"),
         )
         return {"result": result}
