@@ -25,9 +25,19 @@ Handler = Callable[[dict, dict], Awaitable[Any]]
 _RAW_VAR = re.compile(r"^\{(\w+)\}$")
 
 
-class _SafeDict(dict):
-    def __missing__(self, key: str) -> str:  # leave unknown {placeholders} intact
-        return "{" + key + "}"
+_TOKEN = re.compile(r"\{(\w+)\}")
+
+
+def _render_template(text: str, vars: dict) -> str:
+    """Substitute ``{var}`` tokens for known vars, leaving every other brace
+    (e.g. literal JSON in a prompt) untouched. Not ``str.format`` — that treats
+    JSON braces as nested format fields and blows the recursion limit."""
+
+    def repl(m: "re.Match") -> str:
+        key = m.group(1)
+        return str(vars[key]) if key in vars else m.group(0)
+
+    return _TOKEN.sub(repl, text)
 
 
 def _render_args(args: dict, vars: dict) -> dict:
@@ -38,7 +48,7 @@ def _render_args(args: dict, vars: dict) -> dict:
             if m and m.group(1) in vars:
                 out[k] = vars[m.group(1)]  # preserve raw object (dict/list/...)
             else:
-                out[k] = v.format_map(_SafeDict(vars))
+                out[k] = _render_template(v, vars)
         else:
             out[k] = v
     return out
@@ -53,7 +63,7 @@ def _final_text(agent: Any) -> str:
 
 
 async def _run_agent(node: AgentNode, ctx: dict, agent_factory: Callable[[], Any]) -> dict:
-    prompt = node.prompt.format_map(_SafeDict(ctx["vars"]))
+    prompt = _render_template(node.prompt, ctx["vars"])
     agent = agent_factory()
     await agent.prompt(prompt)
     text = _final_text(agent)

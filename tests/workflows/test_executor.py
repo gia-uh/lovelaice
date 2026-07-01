@@ -77,3 +77,31 @@ async def test_agent_node_with_schema_parses_json(monkeypatch, tmp_path):
     )
     out = await run(spec, agent_factory=factory)
     assert out == {"title": "T", "generated_at": "2026-07-01", "widgets": []}
+
+
+@pytest.mark.asyncio
+async def test_prompt_with_literal_json_braces_does_not_break_templating(monkeypatch, tmp_path):
+    # Regression: a prompt containing literal JSON braces must not be parsed as
+    # nested str.format fields (which raised "Max string recursion exceeded").
+    prompt = (
+        'For {who}, output ONLY this JSON: '
+        '{"title":"T","widgets":[{"type":"kpi_grid","items":[{"label":"x","value":"1"}]}]}'
+    )
+    captured = {}
+
+    def factory():
+        fake = AsyncMock()
+        fake.chat = AsyncMock(return_value=Message.assistant("ok", stop_reason="stop"))
+        monkeypatch.setattr("lovelaice.agent.agent._build_llm", lambda cfg: fake)
+        agent = Agent(config=AgentConfig(model="m"), tools=[], loop=ReActNative(),
+                      session_path=tmp_path / "s.jsonl")
+        return agent
+
+    from lovelaice.workflows.executor import _render_template
+    rendered = _render_template(prompt, {"who": "Alex"})
+    assert rendered.startswith("For Alex, output ONLY this JSON: {")
+    assert '{"title":"T","widgets":[{"type":"kpi_grid"' in rendered  # JSON braces intact
+
+    spec = WorkflowSpec.model_validate({"name": "j", "root": {"kind": "agent", "prompt": prompt}})
+    out = await run(spec, agent_factory=factory)  # must not raise
+    assert out == {"text": "ok"}
