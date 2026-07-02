@@ -237,6 +237,39 @@ Off by default → zero hot-path cost for models that don't need it.
 app's existing MCP tests; no new harness — the rewrites are docstring /
 annotation changes validated by existing suites.
 
+## Final validation — live smoke with a real 9B
+
+The unit tests above use a fake LLM; they prove the *mechanism* but not
+that precision actually improved for a small model. The plan's final step
+is a live end-to-end smoke against a real 9B, since that is the whole
+point of the effort.
+
+- **Model:** `qwen/qwen3.5-9b` (OpenRouter, confirmed slug, 262k ctx).
+- **Endpoint:** `https://openrouter.ai/api/v1`.
+- **Key:** workspace token at `/home/apiad/Workspace/.claude/openrouter.token`
+  (never overwrite it; read-only use).
+- **Harness:** a real `lovelaice` `Agent` on the ACP/`agent.harness` path,
+  `repair_tool_calls=True`, driving a representative tool catalog — the
+  built-in tools plus a sample of the audited ainbox MCP tools.
+- **Fixture:** a small set of prompts that each require a specific,
+  non-trivial tool call (right tool, right args, some with optional args
+  and enums, some where a value must come from the conversation).
+
+Measure, before vs after the three workstreams:
+
+- **first-try validation rate** — fraction of tool calls that pass
+  `validate_args` on the model's first emission (the headline metric;
+  Workstreams 0+1 should move this).
+- **repair success rate** — of the calls that fail validation, the
+  fraction the one-shot repair heals (Workstream 2).
+- **end-to-end task success** — the call executes and does the right
+  thing.
+
+Pass bar: first-try validation materially up vs a baseline run with the
+current `main` (flat schemas, no repair), and repair recovering the clear
+majority of the residual failures. This is a manual/scripted step run
+once at the end, not part of CI (it costs real tokens and needs network).
+
 ## Open questions
 
 None outstanding — all forks resolved during design.
