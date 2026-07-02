@@ -1,6 +1,6 @@
 [project]
 name = "lovelaice"
-version = "2.2.0"
+version = "2.3.0"
 description = "A local-first coding agent for the terminal, with Python-defined commands and tools."
 readme = "README.md"
 authors = [
@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "lingo-ai>=2.0.6",
+    "lingo-ai>=2.1.0",
     "beaver-db>=2.0rc3",
     "python-dotenv>=1.2.1",
     "rich>=14.2.0",

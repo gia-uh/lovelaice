@@ -56,7 +56,7 @@ wheels = [
 [[package]]
 name = "beaver-db"
 version = "2.0.0"
-source = { editable = "../beaver" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "numpy" },
@@ -64,30 +64,9 @@ dependencies = [
     { name = "rich" },
     { name = "typer" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiosqlite", specifier = ">=0.21.0" },
-    { name = "beaver-db", extras = ["remote"], marker = "extra == 'full'" },
-    { name = "beaver-db", extras = ["security"], marker = "extra == 'full'" },
-    { name = "cryptography", marker = "extra == 'security'", specifier = ">=46.0.3" },
-    { name = "fastapi", extras = ["standard"], marker = "extra == 'remote'", specifier = ">=0.118.0" },
-    { name = "httpx", marker = "extra == 'remote'", specifier = ">=0.27.0" },
-    { name = "numpy", specifier = ">=2.3.4" },
-    { name = "pydantic", specifier = ">=2.12.3" },
-    { name = "rich", specifier = ">=14.2.0" },
-    { name = "typer", specifier = ">=0.20.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "black", specifier = ">=25.11.0" },
-    { name = "mypy", specifier = ">=1.19.0" },
-    { name = "pytest", specifier = ">=8.4.2" },
-    { name = "pytest-asyncio", specifier = ">=1.2.0" },
-    { name = "pytest-cov", specifier = ">=7.0.0" },
-    { name = "pytest-timeout", specifier = ">=2.4.0" },
-    { name = "textual", specifier = ">=6.1.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/51/16/099f7cb1dde8be17c77d1cfbaa1c78673826fcdf4b2d4ecd6700a9e0073f/beaver_db-2.0.0.tar.gz", hash = "sha256:1bb152a6b47b9be6a7c4985588c775d632afb20f00e41993b700010425571331", size = 1275834 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fb/ec/f1b9e07b24c83c437a411858d1c558819fe1e50df985de8e5dc06888d7e8/beaver_db-2.0.0-py3-none-any.whl", hash = "sha256:2050ee98fe5325daedbabe199acdccfdd8bd62611a05fd4196a843464df97a6d", size = 70095 },
 ]
 
 [[package]]
@@ -392,7 +371,7 @@ wheels = [
 
 [[package]]
 name = "lingo-ai"
-version = "2.0.6"
+version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openai" },
@@ -400,9 +379,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f5/44/3ac60cb4fece41d339ea6c67062f5dc6af3b10bd573667eb911ce8adb011/lingo_ai-2.0.6.tar.gz", hash = "sha256:78198c815dbd563bc67c7c311d9b5d30d2ec9b50024baf685f24402ce0195c0e", size = 164470 }
+sdist = { url = "https://files.pythonhosted.org/packages/3c/be/5e627b971f60059e3be8ebdc526b59697f493742bc5085c14c918dbaea16/lingo_ai-2.1.0.tar.gz", hash = "sha256:5c02982bfe971f5b8bba514cd5cd670119beaf44ed08d52235e83b68bcda0c56", size = 164105 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/8b/03faa154a26ff6974b2f8eb61de2692ee145b0179c2719b8e2ae9d64c22c/lingo_ai-2.0.6-py3-none-any.whl", hash = "sha256:7a9da73d292201e8b76c070119bc079d0d0a136f1496ad4397604887989a748f", size = 37981 },
+    { url = "https://files.pythonhosted.org/packages/6f/8e/60f9d7b794672c408a8cc092b74b24f57e667536dc638521c41d4047cee1/lingo_ai-2.1.0-py3-none-any.whl", hash = "sha256:af5502b9bcd094095a12bc05f0eee9c2e5963b5342170f0aa0956f32cb0727ec", size = 39373 },
 ]
 
 [[package]]
@@ -419,7 +398,7 @@ wheels = [
 
 [[package]]
 name = "lovelaice"
-version = "2.2.0"
+version = "2.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "beaver-db" },
@@ -444,9 +423,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "beaver-db", editable = "../beaver" },
+    { name = "beaver-db", specifier = ">=2.0rc3" },
     { name = "httpx", specifier = ">=0.28" },
-    { name = "lingo-ai", specifier = ">=2.0.6" },
+    { name = "lingo-ai", specifier = ">=2.1.0" },
     { name = "markdownify", specifier = ">=0.13" },
     { name = "mcp", specifier = ">=1.2" },
     { name = "pathspec", specifier = ">=0.12" },
