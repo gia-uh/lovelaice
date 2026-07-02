@@ -270,6 +270,30 @@ current `main` (flat schemas, no repair), and repair recovering the clear
 majority of the residual failures. This is a manual/scripted step run
 once at the end, not part of CI (it costs real tokens and needs network).
 
+## Validation results (2026-07-02, `qwen/qwen3.5-9b` via OpenRouter)
+
+Harness: `scripts/smoke_toolcalls.py`, real `Agent` on the ACP loop against the
+built-in file tools, run against local (enriched) lingo.
+
+- **End-to-end:** 8/8 correct tool chosen and 8/8 executed successfully under
+  every config (flat schemas, enriched schemas, enriched + repair).
+- **First-try validation:** 100% on this fixture under *both* flat and enriched
+  schemas — qwen3.5-9b is capable enough that simple string-arg file tools don't
+  fumble regardless of schema richness. It also respected a `Literal["open",
+  "closed"]` enum when prompted with "finished"/"complete"/"reopen" (mapped to
+  valid values), so the enum probe never produced an invalid call either.
+- **Repair:** could not be provoked on the real model with this fixture (no
+  validation failures to heal). The repair *mechanism* is covered by 5 unit
+  tests; the forced-JSON primitive it relies on (`llm.create` /
+  `response_format`) was confirmed working on `qwen/qwen3.5-9b` via a direct
+  structured-output check.
+
+Takeaway: the schema-enrichment lift is expected to matter most on *harder*
+tool surfaces (the ainbox MCP tools — nested `dict` specs, enums, many optional
+params), not on trivial file tools where a 9B already succeeds. The repair layer
+is a safety net for those harder cases; it stays off by default and on for
+ainbox.
+
 ## Open questions
 
 None outstanding — all forks resolved during design.
