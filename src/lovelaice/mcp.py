@@ -132,11 +132,16 @@ class _MCPTool(Tool):
         params: dict[str, type],
         session: Any,
         tool_name: str,
+        json_schema: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(display_name, description)
         self._params = params
         self._session = session
         self._tool_name = tool_name
+        # Carry the FastMCP inputSchema verbatim so lingo's schema builder
+        # serializes it without flattening. Set explicitly (not via the base
+        # class) so this works regardless of the installed lingo version.
+        self.json_schema = json_schema
 
     def parameters(self) -> dict[str, type]:
         return self._params
@@ -157,12 +162,14 @@ class _MCPTool(Tool):
 
 def _wrap_mcp_tool(*, server_name: str, tool: Any, session: Any) -> _MCPTool:
     """Wrap one MCP tool definition into a `lingo.Tool`."""
+    input_schema = getattr(tool, "inputSchema", None) or None
     return _MCPTool(
         display_name=_mcp_display_name(server_name, tool.name),
         description=getattr(tool, "description", "") or "MCP tool",
-        params=_params_from_input_schema(getattr(tool, "inputSchema", None) or {}),
+        params=_params_from_input_schema(input_schema or {}),
         session=session,
         tool_name=tool.name,
+        json_schema=input_schema,
     )
 
 

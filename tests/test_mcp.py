@@ -56,3 +56,26 @@ async def test_wrap_mcp_tool_calls_session() -> None:
     out = await wrapped.run(path="/tmp/x")
     session.call_tool.assert_awaited_once_with("read_file", {"path": "/tmp/x"})
     assert "hello from mcp" in out
+
+
+def test_mcp_tool_carries_input_schema_verbatim() -> None:
+    """The wrapped tool retains the FastMCP inputSchema verbatim on json_schema,
+    so the lingo schema builder serializes it without flattening."""
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "vault_id": {"type": "string", "description": "vault"},
+            "path": {"type": "string", "description": "note path"},
+            "limit": {"type": "integer", "default": 50},
+        },
+        "required": ["vault_id", "path"],
+    }
+    mcp_tool = MagicMock()
+    mcp_tool.name = "read_note"
+    mcp_tool.description = "Read a note."
+    mcp_tool.inputSchema = input_schema
+
+    wrapped = _wrap_mcp_tool(server_name="magpie", tool=mcp_tool, session=None)
+    assert wrapped.json_schema == input_schema
+    # parameters() still returns the flattened map for back-compat.
+    assert wrapped.parameters() == {"vault_id": str, "path": str, "limit": int}
