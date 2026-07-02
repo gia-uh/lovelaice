@@ -52,6 +52,18 @@ class ToolExecutionEnd(AgentEvent):
 
 
 @dataclass
+class ToolCallRepaired(AgentEvent):
+    """A tool call whose args failed validation was repaired by a focused,
+    forced-JSON LLM shot before execution. Transparency/telemetry channel."""
+
+    call_id: str
+    name: str
+    original_args: dict
+    repaired_args: dict
+    error: str
+
+
+@dataclass
 class SessionAppend(AgentEvent):
     entry_id: str
     entry_type: str

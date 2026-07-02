@@ -22,3 +22,14 @@ def test_event_dataclasses():
     ev = TurnEnd(stop_reason=StopReason.END_TURN, soft_terminate=False)
     assert ev.stop_reason == StopReason.END_TURN
     assert ev.soft_terminate is False
+
+
+def test_tool_call_repaired_event_shape():
+    from lovelaice.agent.events import ToolCallRepaired
+    e = ToolCallRepaired(call_id="c1", name="grep",
+                         original_args={"pattern": "x"},
+                         repaired_args={"pattern": "x", "path": "."},
+                         error="path required")
+    assert e.repaired_args["path"] == "."
+    assert e.original_args == {"pattern": "x"}
+    assert e.name == "grep"

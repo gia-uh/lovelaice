@@ -143,6 +143,22 @@ class Session:
         self._entries.append(entry)
         return entry
 
+    def update_tool_call_args(self, call_id: str, new_args: dict) -> None:
+        """Rewrite the stored arguments of the assistant tool call `call_id`.
+
+        Walks entries newest-first and updates the first matching tool_call's
+        `arguments` in place (in-memory `_entries` only — the append-only JSONL
+        keeps the honest emitted record). No-op if the call id is not found.
+        Used by the repair path so later turns see well-formed calls in history.
+        """
+        for entry in reversed(self._entries):
+            if entry.get("type") != "message":
+                continue
+            for tc in entry.get("tool_calls") or []:
+                if tc.get("id") == call_id:
+                    tc["arguments"] = new_args
+                    return
+
     @property
     def turn_count(self) -> int:
         """Number of user messages (a rough proxy for turns)."""

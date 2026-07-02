@@ -33,6 +33,12 @@ class AgentConfig:
     # a very large `max_tokens` (~64K) which can exceed credit-balance caps
     # even when the actual response would be small. None → SDK default.
     max_tokens: int | None = None
+    # Opt-in: on pydantic arg-validation failure, attempt one focused forced-JSON
+    # repair of the tool-call arguments before falling back to the loop. Off by
+    # default (zero hot-path change); ainbox enables it for small models.
+    repair_tool_calls: bool = False
+    # Grounding context passed to the repair shot: "none" | "turn" | "full".
+    repair_context: str = "turn"
 
 
 def _build_llm(cfg: AgentConfig) -> LLM:
@@ -70,7 +76,9 @@ class Agent:
             base=config.system_prompt, tools=registry, cwd=config.cwd)
         llm = _build_llm(config)
         self.harness = Harness(
-            llm=llm, tools=registry, hooks=hooks, system_prompt=sys_prompt)
+            llm=llm, tools=registry, hooks=hooks, system_prompt=sys_prompt,
+            repair_tool_calls=config.repair_tool_calls,
+            repair_context=config.repair_context)
 
         # Build / load the session.
         path = Path(session_path)
@@ -84,6 +92,8 @@ class Agent:
                 loop=type(loop).__name__,
                 cwd=config.cwd,
             )
+        # Let the harness rewrite in-session tool-call args when repair succeeds.
+        self.harness.session = self.session
 
     @classmethod
     def from_conversation(
@@ -114,9 +124,12 @@ class Agent:
             base=config.system_prompt, tools=registry, cwd=config.cwd)
         llm = _build_llm(config)
         agent.harness = Harness(
-            llm=llm, tools=registry, hooks=hooks, system_prompt=sys_prompt)
+            llm=llm, tools=registry, hooks=hooks, system_prompt=sys_prompt,
+            repair_tool_calls=config.repair_tool_calls,
+            repair_context=config.repair_context)
 
         agent.session = _ConversationSessionAdapter(conversation, store)
+        agent.harness.session = agent.session
         return agent
 
     def messages_for_llm(self) -> list[Message]:
@@ -197,3 +210,13 @@ class _ConversationSessionAdapter:
             return {}
         asyncio.create_task(self._store.append(self._conversation.id, msg))
         return {}
+
+    def update_tool_call_args(self, call_id: str, new_args: dict) -> None:
+        """Rewrite the args of the assistant tool call `call_id` in the live
+        message list (newest-first). No-op if not found. Mirrors Session so the
+        repair path can rewrite history uniformly across both session types."""
+        for msg in reversed(self._messages):
+            for tc in msg.tool_calls or []:
+                if tc.id == call_id:
+                    tc.arguments = new_args
+                    return

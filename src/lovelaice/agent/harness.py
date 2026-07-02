@@ -34,6 +34,8 @@ class Harness:
         hooks: HookRegistry,
         system_prompt: str,
         abort: asyncio.Event | None = None,
+        repair_tool_calls: bool = False,
+        repair_context: str = "turn",
     ):
         self.llm = llm
         self.tools = tools
@@ -41,6 +43,12 @@ class Harness:
         self.system_prompt = system_prompt
         self.abort = abort or asyncio.Event()
         self._subscribers: list[Callable[[Any], Any]] = []
+        # Opt-in focused repair of failed tool-call arguments (see execute_tool).
+        self.repair_tool_calls = repair_tool_calls
+        self.repair_context = repair_context
+        # Set by Agent after the session is built; enables in-session arg-rewrite
+        # when a repair succeeds. None on the bare-harness (test) path.
+        self.session: Any | None = None
 
     def subscribe(self, fn: Callable[[Any], Any]) -> None:
         """Register an event subscriber. Sync or async callables both work."""

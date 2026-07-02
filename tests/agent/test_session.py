@@ -139,3 +139,22 @@ def test_session_turn_count(tmp_path):
     assert sess.turn_count == 1  # only user messages count
     sess.append(Message.user("again"))
     assert sess.turn_count == 2
+
+
+def test_update_tool_call_args_rewrites_entry(tmp_path):
+    s = Session.create(tmp_path / "s.jsonl", model="m",
+                       system_prompt_hash="h", loop="L", cwd=".")
+    s.append(Message.assistant("", tool_calls=[
+        ToolCall(id="c1", name="grep", arguments={"pattern": "x"})]))
+    s.update_tool_call_args("c1", {"pattern": "x", "path": "."})
+    msgs = s.messages_for_llm("sys")
+    assert msgs[-1].tool_calls[0].arguments == {"pattern": "x", "path": "."}
+
+
+def test_update_tool_call_args_unknown_id_is_noop(tmp_path):
+    s = Session.create(tmp_path / "s.jsonl", model="m",
+                       system_prompt_hash="h", loop="L", cwd=".")
+    s.append(Message.assistant("", tool_calls=[
+        ToolCall(id="c1", name="grep", arguments={"pattern": "x"})]))
+    s.update_tool_call_args("nope", {"pattern": "y"})
+    assert s.messages_for_llm("sys")[-1].tool_calls[0].arguments == {"pattern": "x"}
