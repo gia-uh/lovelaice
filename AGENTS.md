@@ -1,38 +1,49 @@
 # AGENTS.md — lovelaice
 
-A sovereign, local-first terminal coding agent. Single ReAct loop on
-top of `lingo`, with a Textual TUI for interactive mode and a Rich-
-streamed one-shot mode.
+A sovereign, local-first terminal **coding agent**. The engine is a **native
+tool-calling ReAct loop** (`Message.tool_calls` on the wire) — one assistant
+message → N tool calls → tool results → loop until the model gives a final
+answer. Read this before touching the repo.
 
-## Quick orientation
+## Architecture (the native engine)
 
-- `src/lovelaice/cli.py` — typer entrypoint. Resolves the workspace
-  root (chdir to the nearest ancestor `.lovelaice.py`) and dispatches
-  to either `oneshot.py` (one-shot) or `tui/app.py` (interactive).
-- `src/lovelaice/config.py` — `Config` plugin registry. Loaded by
-  evaluating the user's `.lovelaice.py`.
-- `src/lovelaice/core.py` — `Lovelaice(Lingo)` injects the env-status
-  block on every turn and forwards a `_on_tool_call` hook through to
-  the running `Engine`.
-- `src/lovelaice/thinking.py` — `ThinkingLLM` adds OpenRouter
-  reasoning passthrough on top of `lingo.LLM`. Plain `lingo.LLM` is
-  used when no `thinking=` knob is set or the base URL is not
-  OpenRouter.
-- `src/lovelaice/mcp.py` — spawns stdio MCP servers in a background
-  asyncio loop and wraps their tools as `lingo.Tool`s named
-  `mcp:<server>:<tool>`. Calls bridge across the threads via
-  `asyncio.run_coroutine_threadsafe`.
-- `src/lovelaice/commands/react.py` — the default command (decide /
-  equip / invoke loop, with a `_lovelaice_on_tool_call` hook).
-- `src/lovelaice/tools/` — built-in tools.
-  - `bash.py` (with `BASH_TIMEOUT`)
-  - `files.py` (`read`, `write`, `edit`, `list_` — registered as
-    `list` by the template)
-  - `search.py` (`glob`, `grep`, both gitignore-aware)
-  - `web.py` (`fetch`)
-- `src/lovelaice/tui/` — Textual app, transcript widget, blocks.
-- `src/lovelaice/oneshot.py` — Rich-driven one-shot mode with
-  isatty-based pipe detection.
+Everything runs through the `agent/` package. The old Lingo-based agent
+(`core.Lovelaice`, `commands/react.py`'s structured-output decide/equip/invoke,
+`config.Config`, the Textual `tui/`, `oneshot.py`, `template.py`, `thinking.py`)
+was **retired 2026-07-03** — do not look for it.
+
+- `src/lovelaice/cli.py` — typer entrypoint. `lovelaice "prompt"` runs one prompt
+  through the engine via an **in-process ACP client** (`acp.client` →
+  `acp.server` → coding host). Piped stdin works. Model via `--model` /
+  `LOVELAICE_MODEL`. No-arg (tty) prints usage.
+- `src/lovelaice/agent/` — the engine.
+  - `agent.py` — `Agent` + `AgentConfig` (the user-facing API: `agent.prompt(text)
+    -> StopReason`). `AgentConfig` carries model/api_key/base_url/max_tokens and
+    the opt-in tool-arg repair knobs.
+  - `loops/react_native.py` — `ReActNative`, the canonical loop.
+  - `harness.py` — LLM-call seam (`llm_call` → `lingo.LLM.chat(tools=…)`), tool
+    dispatch (`execute_tools_batch`), and the `AgentEvent` bus.
+  - `tools.py` — `AgentTool` (wraps a `lingo.Tool` + kind/sequential/title) +
+    `ToolRegistry` + arg validation.
+  - `session.py` / `conversation.py` — persistence; `events.py` — typed events
+    (`TurnStart`, `AssistantMessageFinalized`, `ToolExecutionStart/End`, …);
+    `hooks.py` — `before_llm_call` / `tool_call` reducer chain; `prompt.py` —
+    system-prompt assembly.
+- `src/lovelaice/acp/` — ACP surface. `server.py` (`AcpServer`), `client.py`
+  (`InProcessAcpClient`), `protocol.py`; `__main__.py` is the `lovelaice-acp`
+  stdio server. ACP translates `AgentEvent`s to `session/update` notifications.
+- `src/lovelaice/coding/` — the coding **host**. `host.py`'s
+  `create_coding_agent(model, session_path, cwd)` wires `coding/tools/`
+  (`read`, `bash`) + `coding/hooks.py` guards onto a `ReActNative` agent. This is
+  the host `cli.py` uses.
+- `src/lovelaice/workflows/` — the native workflow engine (agent/tool/sequence
+  nodes; `workflow` decorator). `executor.py` runs a spec against a host.
+- `src/lovelaice/tools/` — standalone utility tools (`bash`, `files`, `search`,
+  `web.fetch`). Not wired into the coding host (which has its own `coding/tools`);
+  kept as a reusable library (external consumers import `lovelaice.tools.web.fetch`).
+- `src/lovelaice/mcp.py` — wrap stdio/HTTP MCP servers as `lingo.Tool`s. A
+  **capability, currently unwired** to the agent path (its old consumer was
+  `Config.build`). Rewiring MCP into the coding host / ACP is a future task.
 
 ## Running tests
 
@@ -42,24 +53,17 @@ uv run pytest
 
 ## Know-how
 
-Specific procedure docs in `know-how/`. Match the task; load the
-matching doc.
+Specific procedure docs in `know-how/`. Match the task; load the matching doc.
 
-- **writing-a-tool** — when adding a new built-in or custom tool.
-- **writing-a-command** — when adding an agent-side workflow command.
+- **writing-a-tool** — adding a new tool (a `lingo.Tool` wrapped as an `AgentTool`
+  in a host, e.g. `coding/host.py`).
 
 ## Manual smoke checklist
 
-The TUI is hard to fully unit-test. Before tagging a release,
-manually smoke:
+Before tagging a release, with `OPENROUTER_API_KEY` set:
 
-- `lovelaice --init` in an empty dir → produces a working
-  `.lovelaice.py`.
-- `lovelaice "list the files"` (with `OPENROUTER_API_KEY` set) →
-  tool call rendered, final reply streams in a Rich panel.
-- `echo nothing | lovelaice "say hi" | wc -l` → only the final reply
-  on stdout (pipe mode).
-- `lovelaice` (no arg) → TUI launches; `/help` shows help; submit a
-  message; `Ctrl+C` cancels; `/exit` quits.
-- A `.lovelaice.py` with `thinking="high"` on a model alias → the
-  thinking panel renders during streaming.
+- `lovelaice "list the files in this repo" --model <slug>` → a real tool call
+  fires (dimmed `→ tool(...)` line) and the reply streams in a Rich panel.
+- `echo "say hi" | lovelaice` → reads the piped prompt, prints the reply.
+- `lovelaice` (tty, no arg) → prints usage and exits non-zero.
+- `lovelaice-acp` → starts the stdio ACP server (smoke via an ACP client).

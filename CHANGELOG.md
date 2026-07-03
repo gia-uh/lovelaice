@@ -1,3 +1,24 @@
+## 2.4.0 — 2026-07-03
+
+### Removed
+
+- **Retired the old Lingo-based agent path.** The structured-output
+  decide/equip/invoke loop (`commands/react.py`) was unreliable — with some
+  models `decide()` short-circuits and no tool ever runs. Deleted `core.py`
+  (`Lovelaice`), `config.py` (`Config`/`.lovelaice.py` build path),
+  `commands/`, `oneshot.py`, `template.py`, `thinking.py`, and the Textual
+  `tui/` (dropped the `textual` dependency). The CLI already ran on the native
+  engine; these modules were dead weight.
+
+### Changed
+
+- `import lovelaice` now exposes the native engine: `Agent`, `AgentConfig`,
+  `workflow`. The single agentic engine is the `agent/` package
+  (`Agent` + `ReActNative`, native `Message.tool_calls`), driven by `cli.py`
+  via an in-process ACP client and the coding host.
+- `mcp.py` is retained as an (currently unwired) capability; rewiring MCP into
+  the agent path is a follow-up.
+
 ## 2.1.2 — 2026-06-30
 
 ### Fixed
