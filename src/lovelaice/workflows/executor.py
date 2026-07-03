@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable
 from lovelaice.workflows.models import (
     AgentNode,
     Node,
+    PromptNode,
     SequenceNode,
     ToolNode,
     WorkflowSpec,
@@ -88,9 +89,30 @@ async def _run_tool(node: ToolNode, ctx: dict) -> dict:
     return {"tool": node.tool, "result": result}
 
 
+async def _run_prompt(node: PromptNode, ctx: dict) -> dict:
+    """Run a prompt against the host's live/primary agent via ``prompt_handler``.
+
+    Raises if no handler was supplied — a ``prompt`` node has no meaning without
+    a live agent to run it on (e.g. a headless/scheduled run).
+    """
+    handler = ctx.get("prompt_handler")
+    if handler is None:
+        raise RuntimeError(
+            "prompt_handler is required to run a 'prompt' node "
+            "(no live/primary agent available — is this a headless run?)"
+        )
+    prompt = _render_template(node.prompt, ctx["vars"])
+    text = await handler(prompt, ctx["vars"])
+    if node.name is not None:
+        ctx["vars"][node.name] = text
+    return {"text": text}
+
+
 async def _run_node(node: Node, ctx: dict, agent_factory: Callable[[], Any]) -> dict:
     if isinstance(node, AgentNode):
         return await _run_agent(node, ctx, agent_factory)
+    if isinstance(node, PromptNode):
+        return await _run_prompt(node, ctx)
     if isinstance(node, ToolNode):
         return await _run_tool(node, ctx)
     if isinstance(node, SequenceNode):
@@ -107,12 +129,21 @@ async def run(
     agent_factory: Callable[[], Any],
     handlers: dict[str, Handler] | None = None,
     inputs: dict | None = None,
+    prompt_handler: "Callable[[str, dict], Awaitable[str]] | None" = None,
 ) -> dict:
     """Execute a workflow spec and return the root node's result dict.
 
     ``handlers`` maps a ``tool`` name to ``async (args, vars) -> Any`` — the host
     provides these (e.g. bridged from an agent's MCP tools). The engine itself
     ships none, keeping it decoupled from any concrete tool.
+
+    ``prompt_handler`` is ``async (prompt, vars) -> str`` — the host runs the
+    prompt on its live/primary agent (shared context). Required only if the spec
+    contains a ``prompt`` node.
     """
-    ctx = {"vars": dict(inputs or {}), "handlers": handlers or {}}
+    ctx = {
+        "vars": dict(inputs or {}),
+        "handlers": handlers or {},
+        "prompt_handler": prompt_handler,
+    }
     return await _run_node(spec.root, ctx, agent_factory)

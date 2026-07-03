@@ -36,12 +36,14 @@ class _Workflow:
         agent_factory: Callable[[], Any],
         handlers: "dict[str, Handler] | None" = None,
         inputs: dict | None = None,
+        prompt_handler: "Callable[[str, dict], Any] | None" = None,
     ) -> dict:
         return await run(
             self._spec,
             agent_factory=agent_factory,
             handlers=handlers,
             inputs=inputs,
+            prompt_handler=prompt_handler,
         )
 
 
