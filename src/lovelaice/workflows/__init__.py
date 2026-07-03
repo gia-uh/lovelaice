@@ -5,6 +5,7 @@ from typing import Any, Callable
 from lovelaice.workflows.models import (
     AgentNode,
     Node,
+    PromptNode,
     SequenceNode,
     ToolNode,
     WorkflowSpec,
@@ -13,6 +14,7 @@ from lovelaice.workflows.executor import Handler, run, _final_text
 
 __all__ = [
     "AgentNode",
+    "PromptNode",
     "ToolNode",
     "SequenceNode",
     "WorkflowSpec",

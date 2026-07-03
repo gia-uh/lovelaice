@@ -1,4 +1,4 @@
-from lovelaice.workflows import AgentNode, SequenceNode, WorkflowSpec
+from lovelaice.workflows import AgentNode, PromptNode, SequenceNode, WorkflowSpec
 
 
 def test_parse_sequence_of_agents_from_dict():
@@ -27,3 +27,22 @@ def test_bare_agent_root():
     )
     assert isinstance(spec.root, AgentNode)
     assert spec.root.name is None
+
+
+def test_prompt_node_parses_via_discriminator():
+    spec = WorkflowSpec.model_validate(
+        {
+            "name": "wf",
+            "root": {
+                "kind": "sequence",
+                "children": [
+                    {"kind": "agent", "prompt": "draft a haiku"},
+                    {"kind": "prompt", "prompt": "critique the haiku above", "name": "crit"},
+                ],
+            },
+        }
+    )
+    child = spec.root.children[1]
+    assert isinstance(child, PromptNode)
+    assert child.prompt == "critique the haiku above"
+    assert child.name == "crit"

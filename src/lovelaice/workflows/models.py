@@ -34,13 +34,26 @@ class ToolNode(BaseModel):
     name: str | None = None
 
 
+class PromptNode(BaseModel):
+    """Run a prompt against the HOST's live/primary agent (shared context),
+    not a fresh one. Same shape as ``AgentNode``; the executor routes it to a
+    host-supplied ``prompt_handler`` instead of ``agent_factory``.
+    """
+
+    kind: Literal["prompt"] = "prompt"
+    prompt: str
+    name: str | None = None
+    output_schema: dict | None = None
+
+
 class SequenceNode(BaseModel):
     kind: Literal["sequence"] = "sequence"
     children: list["Node"] = Field(min_length=1)
 
 
 Node = Annotated[
-    Union[AgentNode, ToolNode, SequenceNode], Field(discriminator="kind")
+    Union[AgentNode, PromptNode, ToolNode, SequenceNode],
+    Field(discriminator="kind"),
 ]
 
 
