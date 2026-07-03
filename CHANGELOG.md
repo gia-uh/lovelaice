@@ -1,3 +1,17 @@
+## 2.6.0 — 2026-07-03
+
+### Added
+
+- **Workflow fan-out: `parallel` and `map` nodes.** `ParallelNode`
+  (`kind: "parallel"`) runs its children concurrently; `MapNode`
+  (`kind: "map"`, with `over` naming a list var and `as` the loop var) fans one
+  child template over that list. Each branch runs in an **isolated copy of vars**
+  (siblings never race); the aggregate list of results is collected into the
+  node's optional `name`. Concurrency is bounded at **4**, enforced at the leaves
+  (`agent`/`tool`/`prompt` calls acquire a shared semaphore) so nested fan-out
+  can't deadlock. A `prompt` node inside a fan-out raises — it would race the
+  single live host agent; use an `agent` node in fan-outs.
+
 ## 2.5.0 — 2026-07-03
 
 ### Added
