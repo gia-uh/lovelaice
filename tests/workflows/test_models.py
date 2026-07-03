@@ -29,6 +29,26 @@ def test_bare_agent_root():
     assert spec.root.name is None
 
 
+def test_parallel_and_map_parse_via_discriminator():
+    from lovelaice.workflows import MapNode, ParallelNode
+
+    spec = WorkflowSpec.model_validate({
+        "name": "fan",
+        "root": {"kind": "sequence", "children": [
+            {"kind": "parallel", "name": "sums", "children": [
+                {"kind": "agent", "prompt": "sum {doc} for eng", "name": "eng"},
+                {"kind": "agent", "prompt": "sum {doc} for exec", "name": "exec"},
+            ]},
+            {"kind": "map", "over": "runtimes", "as": "rt", "name": "research",
+             "node": {"kind": "agent", "prompt": "research {rt}"}},
+        ]},
+    })
+    par = spec.root.children[0]
+    mp = spec.root.children[1]
+    assert isinstance(par, ParallelNode) and len(par.children) == 2
+    assert isinstance(mp, MapNode) and mp.over == "runtimes" and mp.as_ == "rt"
+
+
 def test_prompt_node_parses_via_discriminator():
     spec = WorkflowSpec.model_validate(
         {

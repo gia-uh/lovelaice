@@ -4,7 +4,9 @@ from typing import Any, Callable
 
 from lovelaice.workflows.models import (
     AgentNode,
+    MapNode,
     Node,
+    ParallelNode,
     PromptNode,
     SequenceNode,
     ToolNode,
@@ -16,6 +18,8 @@ __all__ = [
     "AgentNode",
     "PromptNode",
     "ToolNode",
+    "ParallelNode",
+    "MapNode",
     "SequenceNode",
     "WorkflowSpec",
     "Node",

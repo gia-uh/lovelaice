@@ -46,13 +46,35 @@ class PromptNode(BaseModel):
     output_schema: dict | None = None
 
 
+class ParallelNode(BaseModel):
+    """Run children concurrently (each in an isolated vars scope); collect the
+    list of their results into ``name``. Children must NOT be ``prompt`` nodes."""
+
+    kind: Literal["parallel"] = "parallel"
+    children: list["Node"] = Field(min_length=1)
+    name: str | None = None
+
+
+class MapNode(BaseModel):
+    """Fan ``node`` over the list at ``vars[over]``, binding each element to
+    ``vars[as]`` in an isolated scope; collect results into ``name``."""
+
+    kind: Literal["map"] = "map"
+    over: str
+    as_: str = Field(alias="as")
+    node: "Node"
+    name: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
 class SequenceNode(BaseModel):
     kind: Literal["sequence"] = "sequence"
     children: list["Node"] = Field(min_length=1)
 
 
 Node = Annotated[
-    Union[AgentNode, PromptNode, ToolNode, SequenceNode],
+    Union[AgentNode, PromptNode, ToolNode, ParallelNode, MapNode, SequenceNode],
     Field(discriminator="kind"),
 ]
 
@@ -63,3 +85,5 @@ class WorkflowSpec(BaseModel):
 
 
 SequenceNode.model_rebuild()
+ParallelNode.model_rebuild()
+MapNode.model_rebuild()
