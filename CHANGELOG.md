@@ -1,3 +1,17 @@
+## 2.5.0 — 2026-07-03
+
+### Added
+
+- **Workflow `prompt` node.** A new `PromptNode` (`kind: "prompt"`) runs a prompt
+  against the host's *live/primary* agent (shared context) instead of a fresh
+  isolated one, via a new `prompt_handler` seam on `workflows.executor.run(...)`.
+  Same shape as `AgentNode`; the executor routes it to the host-supplied handler
+  and raises if none is provided (a `prompt` node has no meaning headless). The
+  ACP server's `workflow/run` binds `prompt_handler` to the session's live agent
+  (`self._sessions[sessionId]`), so a `prompt` node streams its chunks as
+  `session/update` notifications with no extra plumbing. Enables superbot
+  workflows to drive the ongoing conversation, not only fan out to sub-agents.
+
 ## 2.4.0 — 2026-07-03
 
 ### Removed
