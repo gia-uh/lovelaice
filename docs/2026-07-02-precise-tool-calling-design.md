@@ -282,11 +282,33 @@ built-in file tools, run against local (enriched) lingo.
   fumble regardless of schema richness. It also respected a `Literal["open",
   "closed"]` enum when prompted with "finished"/"complete"/"reopen" (mapped to
   valid values), so the enum probe never produced an invalid call either.
-- **Repair:** could not be provoked on the real model with this fixture (no
-  validation failures to heal). The repair *mechanism* is covered by 5 unit
-  tests; the forced-JSON primitive it relies on (`llm.create` /
-  `response_format`) was confirmed working on `qwen/qwen3.5-9b` via a direct
-  structured-output check.
+- **Repair:** not provoked by the *easy* fixture (no validation failures). A
+  second harness (`scripts/smoke_repair_hard.py`) uses hard tools whose wire
+  schema under-describes structured params (a `BaseModel` param serializes as
+  `string`, a `list[BaseModel]` as an untyped array). qwen3.5-9b then emits
+  structurally invalid args, and repair — handed the full expanded arg schema —
+  heals them:
+  - `create_event(spec: EventSpec)`: model emitted `spec` as a stringified JSON
+    blob → repair rebuilt the nested object → tool executed. Without repair it
+    never recovered.
+  - `create_invoice(items: list[LineItem])`: model emitted `items` as prose
+    strings (`"Widget, 3, $4.50"`) → repair rebuilt proper `LineItem` objects
+    (parsing `$4.50`→`4.5`) → tool executed.
+  - Result: repair OFF → 2/3 first-try-invalid, 2/3 end-to-end; repair ON →
+    2/3 first-try-invalid, **2/2 healed, 3/3 end-to-end**.
+  The forced-JSON primitive (`llm.create` / `response_format`) was also
+  confirmed directly on `qwen/qwen3.5-9b`.
+
+### Follow-up observation (out of scope here)
+
+`validate_args` returns `model_dump()` (a plain dict), so a tool whose parameter
+is typed as a pydantic `BaseModel` (or `list[BaseModel]`) receives dicts, not
+model instances — its body must coerce (`Model(**arg)`) or it raises on
+attribute access. This is pre-existing (independent of repair) and moot for the
+real MCP/scalar tools (JSON args re-validated server-side), but worth a note:
+either `validate_args` should return coerced instances, or lingo should expand
+`BaseModel` params in the wire schema (which would also let the model get them
+right first-try). Not addressed in this change.
 
 Takeaway: the schema-enrichment lift is expected to matter most on *harder*
 tool surfaces (the ainbox MCP tools — nested `dict` specs, enums, many optional
