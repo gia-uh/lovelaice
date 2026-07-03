@@ -8,13 +8,16 @@ agents are built and what tools/MCP they carry.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any, Awaitable, Callable
 
 from lovelaice.workflows.models import (
     AgentNode,
+    MapNode,
     Node,
+    ParallelNode,
     PromptNode,
     SequenceNode,
     ToolNode,
@@ -22,6 +25,8 @@ from lovelaice.workflows.models import (
 )
 
 Handler = Callable[[dict, dict], Awaitable[Any]]
+
+MAX_CONCURRENCY = 4
 
 _RAW_VAR = re.compile(r"^\{(\w+)\}$")
 
@@ -63,10 +68,29 @@ def _final_text(agent: Any) -> str:
     return ""
 
 
+class _NullAsem:
+    """Async no-op context — used when no concurrency semaphore is in ctx."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+_NULL_ASEM = _NullAsem()
+
+
+def _sem(ctx: dict):
+    """The concurrency limiter for leaf work; a no-op if none was seeded."""
+    return ctx.get("sem") or _NULL_ASEM
+
+
 async def _run_agent(node: AgentNode, ctx: dict, agent_factory: Callable[[], Any]) -> dict:
     prompt = _render_template(node.prompt, ctx["vars"])
     agent = agent_factory()
-    await agent.prompt(prompt)
+    async with _sem(ctx):
+        await agent.prompt(prompt)
     text = _final_text(agent)
     if node.output_schema is not None:
         value = json.loads(text)
@@ -83,7 +107,8 @@ async def _run_tool(node: ToolNode, ctx: dict) -> dict:
     if handler is None:
         raise KeyError(f"no handler registered for tool: {node.tool!r}")
     args = _render_args(node.args, ctx["vars"])
-    result = await handler(args, ctx["vars"])
+    async with _sem(ctx):
+        result = await handler(args, ctx["vars"])
     if node.name is not None:
         ctx["vars"][node.name] = result
     return {"tool": node.tool, "result": result}
@@ -93,8 +118,14 @@ async def _run_prompt(node: PromptNode, ctx: dict) -> dict:
     """Run a prompt against the host's live/primary agent via ``prompt_handler``.
 
     Raises if no handler was supplied — a ``prompt`` node has no meaning without
-    a live agent to run it on (e.g. a headless/scheduled run).
+    a live agent to run it on (e.g. a headless/scheduled run) — or if reached
+    inside a fan-out (it would race the single live agent).
     """
+    if ctx.get("in_fanout"):
+        raise RuntimeError(
+            "a 'prompt' node cannot run inside a parallel/map fan-out (it would "
+            "race the single live conversation agent) — use an 'agent' node instead"
+        )
     handler = ctx.get("prompt_handler")
     if handler is None:
         raise RuntimeError(
@@ -102,10 +133,44 @@ async def _run_prompt(node: PromptNode, ctx: dict) -> dict:
             "(no live/primary agent available — is this a headless run?)"
         )
     prompt = _render_template(node.prompt, ctx["vars"])
-    text = await handler(prompt, ctx["vars"])
+    async with _sem(ctx):
+        text = await handler(prompt, ctx["vars"])
     if node.name is not None:
         ctx["vars"][node.name] = text
     return {"text": text}
+
+
+def _child_ctx(ctx: dict, extra_vars: dict | None = None) -> dict:
+    """A fan-out branch's ctx: an ISOLATED vars copy (so siblings never race),
+    flagged in_fanout (so a prompt node inside raises)."""
+    return {**ctx, "vars": {**ctx["vars"], **(extra_vars or {})}, "in_fanout": True}
+
+
+async def _run_parallel(node: ParallelNode, ctx: dict, agent_factory: Callable[[], Any]) -> dict:
+    async def run_child(child):
+        return await _run_node(child, _child_ctx(ctx), agent_factory)
+
+    results = list(await asyncio.gather(*[run_child(c) for c in node.children]))
+    if node.name is not None:
+        ctx["vars"][node.name] = results
+    return {"items": results}
+
+
+async def _run_map(node: MapNode, ctx: dict, agent_factory: Callable[[], Any]) -> dict:
+    items = ctx["vars"].get(node.over)
+    if not isinstance(items, list):
+        raise RuntimeError(
+            f"map 'over' must name a list var; vars[{node.over!r}] is "
+            f"{type(items).__name__}"
+        )
+
+    async def run_item(el):
+        return await _run_node(node.node, _child_ctx(ctx, {node.as_: el}), agent_factory)
+
+    results = list(await asyncio.gather(*[run_item(x) for x in items]))
+    if node.name is not None:
+        ctx["vars"][node.name] = results
+    return {"items": results}
 
 
 async def _run_node(node: Node, ctx: dict, agent_factory: Callable[[], Any]) -> dict:
@@ -115,6 +180,10 @@ async def _run_node(node: Node, ctx: dict, agent_factory: Callable[[], Any]) -> 
         return await _run_prompt(node, ctx)
     if isinstance(node, ToolNode):
         return await _run_tool(node, ctx)
+    if isinstance(node, ParallelNode):
+        return await _run_parallel(node, ctx, agent_factory)
+    if isinstance(node, MapNode):
+        return await _run_map(node, ctx, agent_factory)
     if isinstance(node, SequenceNode):
         result: dict = {}
         for child in node.children:
@@ -145,5 +214,7 @@ async def run(
         "vars": dict(inputs or {}),
         "handlers": handlers or {},
         "prompt_handler": prompt_handler,
+        "sem": asyncio.Semaphore(MAX_CONCURRENCY),
+        "in_fanout": False,
     }
     return await _run_node(spec.root, ctx, agent_factory)
