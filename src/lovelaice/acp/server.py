@@ -197,8 +197,15 @@ class AcpServer:
         was built with. ``tool`` nodes are dispatched to handlers bridged from
         that agent's wired tools (e.g. magpie's ``write_note`` MCP tool) — so the
         workflow engine stays generic while the host supplies the effects.
+
+        A ``prompt`` node runs on the session's LIVE agent
+        (``self._sessions[sessionId]``) — shared context, and because that agent
+        is already subscribed its chunks stream as ``session/update``. Absent a
+        live session (headless), ``prompt_handler`` stays ``None`` so a prompt
+        node raises rather than silently running isolated.
         """
         from lovelaice.workflows import WorkflowSpec, run as _run
+        from lovelaice.workflows.executor import _final_text
 
         spec = WorkflowSpec.model_validate(params["spec"])
 
@@ -209,11 +216,19 @@ class AcpServer:
                 return await _tool.inner.run(**args)
             handlers[t.name] = _handler
 
+        live_agent = self._sessions.get(params.get("sessionId"))
+        prompt_handler = None
+        if live_agent is not None:
+            async def prompt_handler(prompt, _vars, _a=live_agent):  # noqa: E731
+                await _a.prompt(prompt)
+                return _final_text(_a)
+
         result = await _run(
             spec,
             agent_factory=lambda: self._agent_factory(),
             handlers=handlers,
             inputs=params.get("inputs"),
+            prompt_handler=prompt_handler,
         )
         return {"result": result}
 
