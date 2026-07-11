@@ -1,3 +1,29 @@
+## 2.7.0 — 2026-07-10
+
+### Added
+
+- **ACP v1 server (`lovelaice.acp.v1`).** A clean-room ACP server built on the
+  official `agent-client-protocol` SDK (`acp.Agent` + `acp.run_agent`):
+  `initialize` (protocol version 1), `new_session`, `prompt`, `cancel`, and
+  agent-event → `session/update` translation via the SDK's builder helpers
+  (correct nested wire shape). Returns `stopReason` from the run. The
+  `lovelaice-acp` console script now runs this v1 server. Enables official ACP
+  clients (aegis, Zed) to drive lovelaice as a native, harness-free agent over
+  local or direct-API models.
+
+### Changed
+
+- `lovelaice-acp` entrypoint repointed from the legacy hand-rolled server to the
+  new v1 server. The legacy `lovelaice.acp.server.AcpServer` (0.1 flat dialect)
+  is **preserved unchanged** for existing clients (warden) — importable as a
+  class; only the CLI default moved.
+
+### Fixed
+
+- ACP prompt text is now extracted from typed `TextContentBlock` objects (as the
+  SDK delivers over the wire), not just dicts — the dict-only path produced an
+  empty prompt so the agent ignored the user message.
+
 ## 2.6.0 — 2026-07-03
 
 ### Added
