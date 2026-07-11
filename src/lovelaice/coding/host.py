@@ -22,11 +22,14 @@ def create_coding_agent(
     cwd: str,
     base_url: str | None = None,
     api_key: str | None = None,
+    extra_tools: list[AgentTool] | None = None,
 ) -> Agent:
     """Build a coding-host Agent.
 
     Wires the read+bash tools, the path-pattern + bash-prefix guard hooks,
-    and the coding preamble onto a ReActNative agent.
+    and the coding preamble onto a ReActNative agent. ``extra_tools`` (e.g.
+    per-session MCP tools) are added to the registry at construction so the
+    system prompt advertises them.
     """
     cfg = AgentConfig(
         model=model,
@@ -39,6 +42,7 @@ def create_coding_agent(
         AgentTool(inner=read_tool, kind="read", title_template="Reading {path}"),
         AgentTool(inner=bash_tool, sequential=True, kind="execute",
                   title_template="Running shell"),
+        *(extra_tools or []),
     ]
     agent = Agent(config=cfg, tools=tools, loop=ReActNative(),
                   session_path=session_path)
