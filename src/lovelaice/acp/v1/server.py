@@ -68,8 +68,7 @@ class AcpServerV1(acp.Agent):
             raise acp.RequestError(
                 code=-32602, message=f"unknown sessionId: {session_id}")
         self._loop = asyncio.get_running_loop()
-        text = "".join(b.get("text", "") for b in prompt
-                       if isinstance(b, dict) and b.get("type") == "text")
+        text = self._prompt_text(prompt)
         task = asyncio.ensure_future(agent.prompt(text))
         self._inflight = task
         try:
@@ -80,6 +79,20 @@ class AcpServerV1(acp.Agent):
             self._inflight = None
         value = getattr(stop, "value", None) or str(stop)
         return acp.PromptResponse(stop_reason=value)
+
+    @staticmethod
+    def _prompt_text(prompt) -> str:
+        """Join the text of every text content block. The ACP SDK delivers
+        typed ``TextContentBlock`` objects over the wire (``.type``/``.text``
+        attributes); local callers may pass plain dicts. Handle both."""
+        parts: list[str] = []
+        for b in prompt:
+            if isinstance(b, dict):
+                if b.get("type") == "text":
+                    parts.append(b.get("text", "") or "")
+            elif getattr(b, "type", None) == "text":
+                parts.append(getattr(b, "text", "") or "")
+        return "".join(parts)
 
     async def cancel(self, session_id: str, **kw: Any) -> None:
         task = self._inflight

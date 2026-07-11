@@ -94,6 +94,16 @@ def _real_agent_factory(tmp_path):
     return factory
 
 
+def test_prompt_text_extraction_handles_dicts_and_content_blocks():
+    # Over the real ACP wire the SDK delivers typed TextContentBlock objects,
+    # not dicts. Both must yield the text (regression: the object path once
+    # returned "" and the agent saw an empty prompt).
+    block = acp.text_block("from object")
+    assert AcpServerV1._prompt_text([{"type": "text", "text": "from dict"}]) == "from dict"
+    assert AcpServerV1._prompt_text([block]) == "from object"
+    assert AcpServerV1._prompt_text([block, {"type": "text", "text": "!"}]) == "from object!"
+
+
 @pytest.mark.asyncio
 async def test_prompt_returns_stop_reason(tmp_path):
     server = AcpServerV1(agent_factory=_real_agent_factory(tmp_path))
