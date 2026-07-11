@@ -217,6 +217,30 @@ class ManagedMcpSession:
         self._thread.join(timeout=5.0)
 
 
+def build_agent_tools(specs: list[dict]):
+    """Start a managed session per spec and wrap each exposed MCP tool as an
+    ``AgentTool``. Returns ``(tools, sessions)``: the tools go onto the agent,
+    the sessions are retained by the caller for teardown. A spec that fails to
+    start is logged and skipped (no tools, no session)."""
+    from lovelaice.agent.tools import AgentTool
+
+    tools: list = []
+    sessions: list[ManagedMcpSession] = []
+    for spec in specs:
+        try:
+            sess = start_managed_session(spec)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[mcp] {spec.get('name', '<unnamed>')}: "
+                  f"failed to start ({exc!r})")
+            continue
+        sessions.append(sess)
+        for t in sess.tools:
+            wrapped = _wrap_mcp_tool(
+                server_name=spec.get("name", "mcp"), tool=t, session=sess)
+            tools.append(AgentTool(inner=wrapped, kind="other"))
+    return tools, sessions
+
+
 def start_managed_session(spec: dict) -> "ManagedMcpSession":
     """Start an MCP server (HTTP or stdio) on a background loop/thread, init
     the ClientSession, list its tools, and park until closed. Reuses the

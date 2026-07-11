@@ -17,6 +17,24 @@ mcp.run(transport="stdio")
 
 
 @pytest.mark.asyncio
+async def test_build_agent_tools_wraps_and_returns_sessions(tmp_path):
+    from lovelaice.agent.tools import AgentTool
+    from lovelaice.mcp import build_agent_tools
+
+    script = tmp_path / "echo_server.py"
+    script.write_text(SERVER)
+    tools, sessions = build_agent_tools(
+        [{"name": "echo", "command": sys.executable, "args": [str(script)]}])
+    try:
+        assert len(sessions) == 1
+        assert any(isinstance(t, AgentTool) and t.name == "mcp:echo:ping"
+                   for t in tools)
+    finally:
+        for s in sessions:
+            await s.aclose()
+
+
+@pytest.mark.asyncio
 async def test_managed_stdio_session_lists_and_calls_and_closes(tmp_path):
     script = tmp_path / "echo_server.py"
     script.write_text(SERVER)
