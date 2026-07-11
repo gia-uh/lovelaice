@@ -190,6 +190,83 @@ def register_mcp_tools(agent: Any, specs: list[dict[str, Any]]) -> None:
             agent.tools.append(wrapped)
 
 
+# --- Managed background session (HTTP + stdio, with teardown) ---------------
+
+
+class ManagedMcpSession:
+    """An MCP ClientSession kept alive on a dedicated background loop/thread,
+    with explicit teardown. Supports HTTP (``{url}``) and stdio
+    (``{command}``) transports. ``call_tool`` marshals onto the background
+    loop; ``aclose`` signals the loop to unwind the transport and joins the
+    thread."""
+
+    def __init__(self, loop, session, thread, stop_event, tools):
+        self._loop = loop
+        self._session = session
+        self._thread = thread
+        self._stop = stop_event
+        self.tools = tools
+
+    async def call_tool(self, name: str, kwargs: dict):
+        fut = asyncio.run_coroutine_threadsafe(
+            self._session.call_tool(name, kwargs), self._loop)
+        return await asyncio.wrap_future(fut)
+
+    async def aclose(self) -> None:
+        self._loop.call_soon_threadsafe(self._stop.set)
+        self._thread.join(timeout=5.0)
+
+
+def start_managed_session(spec: dict) -> "ManagedMcpSession":
+    """Start an MCP server (HTTP or stdio) on a background loop/thread, init
+    the ClientSession, list its tools, and park until closed. Reuses the
+    module's ``_http_session`` / ``_stdio_session`` context managers."""
+    if ClientSession is None:
+        raise RuntimeError("mcp Python SDK not installed")
+
+    ready = threading.Event()
+    holder: dict[str, Any] = {}
+
+    def _runner() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        stop = asyncio.Event()
+
+        async def _go() -> None:
+            if "url" in spec:
+                cm = _http_session(spec)
+            elif "command" in spec:
+                cm = _stdio_session(spec)
+            else:
+                raise ValueError(f"unrecognized MCP config: {spec!r}")
+            async with cm as session:
+                tools = (await session.list_tools()).tools
+                holder.update(loop=loop, session=session, stop=stop,
+                              tools=list(tools))
+                ready.set()
+                await stop.wait()
+
+        try:
+            loop.run_until_complete(_go())
+        except BaseException as e:  # noqa: BLE001
+            holder["error"] = e
+            ready.set()
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=_runner, daemon=True,
+                         name=f"mcp-{spec.get('name', '?')}")
+    t.start()
+    ready.wait(timeout=20.0)
+    if "error" in holder:
+        raise holder["error"]
+    if "session" not in holder:
+        raise RuntimeError(
+            f"MCP server {spec.get('name')!r} did not initialize within 20s")
+    return ManagedMcpSession(holder["loop"], holder["session"], t,
+                             holder["stop"], holder["tools"])
+
+
 # --- Cross-thread session machinery ----------------------------------------
 
 
