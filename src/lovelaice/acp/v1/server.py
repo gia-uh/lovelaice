@@ -35,6 +35,8 @@ class AcpServerV1(acp.Agent):
         self._sessions: dict[str, Any] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._inflight: asyncio.Task | None = None
+        # session_id -> list[ManagedMcpSession] to tear down on close.
+        self._mcp_sessions: dict[str, list] = {}
 
     def on_connect(self, conn: acp.Client) -> None:
         self._conn = conn
@@ -52,14 +54,48 @@ class AcpServerV1(acp.Agent):
             ),
         )
 
+    @staticmethod
+    def _mcp_specs_from_acp(mcp_servers) -> list[dict]:
+        """Map ACP mcp_server objects to lovelaice.mcp.connect() specs.
+
+        HttpMcpServer (has ``url``) → {name, url, headers-as-dict};
+        McpServerStdio (has ``command``) → {name, command, args, env}.
+        Duck-typed so a plain object or dict both work."""
+        specs: list[dict] = []
+        for s in (mcp_servers or []):
+            get = (s.get if isinstance(s, dict) else lambda k, d=None: getattr(s, k, d))
+            name = get("name")
+            if get("url") is not None:
+                headers = {}
+                for h in (get("headers") or []):
+                    hn = h.get("name") if isinstance(h, dict) else getattr(h, "name", None)
+                    hv = h.get("value") if isinstance(h, dict) else getattr(h, "value", None)
+                    if hn is not None:
+                        headers[hn] = hv
+                specs.append({"name": name, "url": get("url"), "headers": headers})
+            elif get("command") is not None:
+                specs.append({"name": name, "command": get("command"),
+                              "args": get("args") or [], "env": get("env")})
+        return specs
+
     async def new_session(self, cwd: str, additional_directories=None,
                           mcp_servers=None, **kw: Any) -> acp.NewSessionResponse:
-        agent = self._agent_factory()
+        from lovelaice.mcp import build_agent_tools
+        specs = self._mcp_specs_from_acp(mcp_servers)
+        mcp_tools, sessions = build_agent_tools(specs) if specs else ([], [])
+        agent = self._agent_factory(mcp_tools=mcp_tools)
         sid = uuid.uuid4().hex[:16]
         agent.subscribe(lambda ev, _sid=sid: self._emit(_sid, ev))
         self._sessions[sid] = agent
-        # mcp_servers accepted; per-session attach is a later slice (VS2).
+        self._mcp_sessions[sid] = sessions
         return acp.NewSessionResponse(session_id=sid)
+
+    async def _teardown_mcp(self, session_id: str) -> None:
+        for s in self._mcp_sessions.pop(session_id, []):
+            try:
+                await s.aclose()
+            except Exception:  # noqa: BLE001
+                pass
 
     async def prompt(self, prompt, session_id: str, message_id=None,
                      **kw: Any) -> acp.PromptResponse:
@@ -98,6 +134,12 @@ class AcpServerV1(acp.Agent):
         task = self._inflight
         if task is not None and not task.done():
             task.cancel()
+
+    async def close_session(self, session_id: str, **kw: Any):
+        # Tear down the session's MCP background sessions + drop the agent.
+        await self._teardown_mcp(session_id)
+        self._sessions.pop(session_id, None)
+        return None
 
     # -- event translation --------------------------------------------------
 

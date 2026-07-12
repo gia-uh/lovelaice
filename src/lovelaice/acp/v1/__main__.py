@@ -15,7 +15,7 @@ from lovelaice.acp.v1.server import AcpServerV1
 from lovelaice.coding.host import create_coding_agent
 
 
-def _default_factory(**_kw):
+def _default_factory(*, mcp_tools=None, **_kw):
     if os.getenv("LOVELAICE_FAKE_LLM"):
         from unittest.mock import AsyncMock
         from lingo.llm import Message
@@ -34,6 +34,7 @@ def _default_factory(**_kw):
         cwd=os.getenv("LOVELAICE_CWD", os.getcwd()),
         base_url=os.getenv("LOVELAICE_BASE_URL"),
         api_key=os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY"),
+        extra_tools=mcp_tools,
     )
 
 

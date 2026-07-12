@@ -94,6 +94,25 @@ def _real_agent_factory(tmp_path):
     return factory
 
 
+def test_mcp_specs_from_acp_maps_http_and_stdio():
+    class Hdr:
+        def __init__(self, name, value):
+            self.name, self.value = name, value
+
+    class H:  # HttpMcpServer-shaped
+        name, url = "aegis", "http://x/mcp"
+        headers = [Hdr("Authorization", "Bearer z")]
+
+    class S:  # McpServerStdio-shaped
+        name, command, args, env = "local", "mytool", ["--x"], None
+
+    specs = AcpServerV1._mcp_specs_from_acp([H(), S()])
+    assert specs[0] == {"name": "aegis", "url": "http://x/mcp",
+                        "headers": {"Authorization": "Bearer z"}}
+    assert specs[1] == {"name": "local", "command": "mytool",
+                        "args": ["--x"], "env": None}
+
+
 def test_prompt_text_extraction_handles_dicts_and_content_blocks():
     # Over the real ACP wire the SDK delivers typed TextContentBlock objects,
     # not dicts. Both must yield the text (regression: the object path once
@@ -102,6 +121,47 @@ def test_prompt_text_extraction_handles_dicts_and_content_blocks():
     assert AcpServerV1._prompt_text([{"type": "text", "text": "from dict"}]) == "from dict"
     assert AcpServerV1._prompt_text([block]) == "from object"
     assert AcpServerV1._prompt_text([block, {"type": "text", "text": "!"}]) == "from object!"
+
+
+_MCP_ECHO = '''
+from mcp.server.fastmcp import FastMCP
+mcp = FastMCP("echo")
+
+@mcp.tool()
+def ping(msg: str) -> str:
+    return f"pong:{msg}"
+
+mcp.run(transport="stdio")
+'''
+
+
+@pytest.mark.asyncio
+async def test_new_session_attaches_mcp_tools_and_close_tears_down(tmp_path):
+    import sys as _sys
+    script = tmp_path / "echo_server.py"
+    script.write_text(_MCP_ECHO)
+
+    captured = {}
+
+    def factory(*, mcp_tools=None, **kw):
+        captured["mcp_tools"] = mcp_tools or []
+        agent = _FakeAgent()
+        agent.harness_tools = {t.name for t in (mcp_tools or [])}
+        return agent
+
+    server = AcpServerV1(agent_factory=factory)
+    # ACP-shaped stdio server object.
+    class Stdio:
+        name, command, args, env = "echo", _sys.executable, [str(script)], None
+
+    resp = await server.new_session(cwd=str(tmp_path), mcp_servers=[Stdio()])
+    sid = resp.session_id
+    assert any(t.name == "mcp:echo:ping" for t in captured["mcp_tools"])
+    assert server._mcp_sessions[sid], "managed session retained for teardown"
+
+    await server.close_session(sid)
+    assert sid not in server._mcp_sessions
+    assert sid not in server._sessions
 
 
 @pytest.mark.asyncio
