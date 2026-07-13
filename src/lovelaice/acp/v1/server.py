@@ -15,6 +15,7 @@ import acp
 from acp.schema import AgentCapabilities, PromptCapabilities
 
 from lovelaice.agent.events import (
+    AssistantMessageDelta,
     AssistantMessageFinalized,
     ToolExecutionEnd,
     ToolExecutionStart,
@@ -39,6 +40,9 @@ class AcpServerV1(acp.Agent):
         self._mcp_sessions: dict[str, list] = {}
         # Per-turn token accumulators (reset at the start of each prompt).
         self._acc_in = self._acc_out = self._acc_total = 0
+        # Whether any content token streamed this turn (reset per prompt);
+        # gates the finalized-message fallback emit.
+        self._streamed_any = False
 
     def on_connect(self, conn: acp.Client) -> None:
         self._conn = conn
@@ -112,6 +116,7 @@ class AcpServerV1(acp.Agent):
                 code=-32602, message=f"unknown sessionId: {session_id}")
         self._loop = asyncio.get_running_loop()
         self._acc_in = self._acc_out = self._acc_total = 0
+        self._streamed_any = False
         text = self._prompt_text(prompt)
         task = asyncio.ensure_future(agent.prompt(text))
         self._inflight = task
@@ -163,13 +168,30 @@ class AcpServerV1(acp.Agent):
     # -- event translation --------------------------------------------------
 
     def _emit(self, session_id: str, ev: Any) -> None:
+        # Streamed content token → an AgentMessageChunk; remember we streamed
+        # so the finalized message doesn't re-emit the same text.
+        if isinstance(ev, AssistantMessageDelta):
+            self._streamed_any = True
+            if ev.text:
+                self._dispatch(session_id, acp.update_agent_message_text(ev.text))
+            return
         if isinstance(ev, AssistantMessageFinalized):
             u = getattr(ev.message, "usage", None)
             if u is not None:
                 self._acc_in += int(getattr(u, "prompt_tokens", 0) or 0)
                 self._acc_out += int(getattr(u, "completion_tokens", 0) or 0)
                 self._acc_total += int(getattr(u, "total_tokens", 0) or 0)
-        update = self._translate(ev)
+            # Fallback for non-streaming providers: emit the whole message only
+            # if nothing streamed this turn.
+            if not self._streamed_any:
+                text = ev.message.content \
+                    if isinstance(ev.message.content, str) else ""
+                if text:
+                    self._dispatch(session_id, acp.update_agent_message_text(text))
+            return
+        self._dispatch(session_id, self._translate(ev))
+
+    def _dispatch(self, session_id: str, update) -> None:
         if update is None or self._conn is None:
             return
         loop = self._loop or asyncio.get_event_loop()
@@ -182,9 +204,6 @@ class AcpServerV1(acp.Agent):
         )
 
     def _translate(self, ev: Any):
-        if isinstance(ev, AssistantMessageFinalized):
-            text = ev.message.content if isinstance(ev.message.content, str) else ""
-            return acp.update_agent_message_text(text) if text else None
         if isinstance(ev, ToolExecutionStart):
             return acp.start_tool_call(
                 tool_call_id=ev.call_id, title=ev.name,

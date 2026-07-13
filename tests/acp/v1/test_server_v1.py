@@ -165,6 +165,39 @@ async def test_new_session_attaches_mcp_tools_and_close_tears_down(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_deltas_stream_and_finalized_not_duplicated():
+    from lovelaice.agent.events import (
+        AssistantMessageDelta, AssistantMessageFinalized)
+    conn = _FakeConn()
+    server = AcpServerV1(agent_factory=lambda **kw: _FakeAgent())
+    server.on_connect(conn)
+    server._loop = asyncio.get_running_loop()
+    server._streamed_any = False
+    server._emit("s", AssistantMessageDelta(text="he"))
+    server._emit("s", AssistantMessageDelta(text="llo"))
+    server._emit("s", AssistantMessageFinalized(message=_Msg()))
+    await asyncio.sleep(0.05)
+    texts = [u.content.text for _s, u in conn.updates
+             if type(u).__name__ == "AgentMessageChunk"]
+    assert texts == ["he", "llo"]  # finalized did NOT re-emit content
+
+
+@pytest.mark.asyncio
+async def test_finalized_emits_content_when_no_streaming():
+    from lovelaice.agent.events import AssistantMessageFinalized
+    conn = _FakeConn()
+    server = AcpServerV1(agent_factory=lambda **kw: _FakeAgent())
+    server.on_connect(conn)
+    server._loop = asyncio.get_running_loop()
+    server._streamed_any = False
+    server._emit("s", AssistantMessageFinalized(message=_Msg()))
+    await asyncio.sleep(0.05)
+    texts = [u.content.text for _s, u in conn.updates
+             if type(u).__name__ == "AgentMessageChunk"]
+    assert texts == ["hello from agent"]  # fallback emit
+
+
+@pytest.mark.asyncio
 async def test_prompt_surfaces_token_usage(tmp_path):
     from lovelaice.agent.events import AssistantMessageFinalized
 
