@@ -1,4 +1,4 @@
-"""MCP integration: tool wrapping and registration with `mcp:server:tool` naming."""
+"""MCP integration: tool wrapping and registration with `mcp_server_tool` naming."""
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
@@ -9,7 +9,7 @@ from lovelaice.mcp import _mcp_display_name, _params_from_input_schema, _wrap_mc
 
 
 def test_mcp_display_name() -> None:
-    assert _mcp_display_name("filesystem", "read_file") == "mcp:filesystem:read_file"
+    assert _mcp_display_name("filesystem", "read_file") == "mcp_filesystem_read_file"
 
 
 def test_params_from_input_schema_handles_types() -> None:
@@ -49,7 +49,7 @@ async def test_wrap_mcp_tool_calls_session() -> None:
     }
 
     wrapped = _wrap_mcp_tool(server_name="filesystem", tool=mcp_tool, session=session)
-    assert wrapped.name == "mcp:filesystem:read_file"
+    assert wrapped.name == "mcp_filesystem_read_file"
     assert "Read a file" in wrapped.description
     assert wrapped.parameters() == {"path": str}
 
