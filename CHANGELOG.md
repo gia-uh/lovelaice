@@ -1,3 +1,12 @@
+## 2.10.0 — 2026-07-13
+
+### Added
+
+- **Token usage in the ACP v1 `PromptResponse`.** `AcpServerV1` accumulates
+  prompt/completion/total tokens from each finalized assistant message across a
+  turn and returns them as an ACP `Usage`, so ACP clients (aegis) show real
+  token metrics instead of 0/0. Server-side only — no engine change.
+
 ## 2.9.0 — 2026-07-13
 
 ### Added
