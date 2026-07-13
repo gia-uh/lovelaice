@@ -1,3 +1,26 @@
+## 2.8.0 — 2026-07-12
+
+### Added
+
+- **Per-session MCP attach in the ACP v1 server.** `AcpServerV1.new_session`
+  reads ACP `mcp_servers` (HTTP + stdio), connects each, wraps their tools, and
+  builds the session's agent **with** those tools (so the system prompt
+  advertises them). Managed sessions are torn down on `close_session`. This lets
+  an ACP client (e.g. aegis) give a native lovelaice agent access to its own MCP
+  plane per session.
+- **`lovelaice.mcp.ManagedMcpSession` + `start_managed_session` +
+  `build_agent_tools`** — a first-class background MCP session supporting **HTTP
+  and stdio** with explicit teardown (`aclose`), generalizing the previous
+  stdio-only helper.
+- **`create_coding_agent(extra_tools=…)`** — inject extra tools (e.g. per-session
+  MCP tools) at agent construction.
+
+### Fixed
+
+- MCP tool display names are sanitized to the LLM tool-name pattern
+  (`^[a-zA-Z0-9_-]{1,128}$`) — the old `mcp:<server>:<tool>` form contains colons
+  that Anthropic/OpenAI reject, 400-ing the whole request.
+
 ## 2.7.0 — 2026-07-10
 
 ### Added
