@@ -27,7 +27,7 @@ async def test_build_agent_tools_wraps_and_returns_sessions(tmp_path):
         [{"name": "echo", "command": sys.executable, "args": [str(script)]}])
     try:
         assert len(sessions) == 1
-        assert any(isinstance(t, AgentTool) and t.name == "mcp:echo:ping"
+        assert any(isinstance(t, AgentTool) and t.name == "mcp_echo_ping"
                    for t in tools)
     finally:
         for s in sessions:

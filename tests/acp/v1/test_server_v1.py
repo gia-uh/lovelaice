@@ -156,7 +156,7 @@ async def test_new_session_attaches_mcp_tools_and_close_tears_down(tmp_path):
 
     resp = await server.new_session(cwd=str(tmp_path), mcp_servers=[Stdio()])
     sid = resp.session_id
-    assert any(t.name == "mcp:echo:ping" for t in captured["mcp_tools"])
+    assert any(t.name == "mcp_echo_ping" for t in captured["mcp_tools"])
     assert server._mcp_sessions[sid], "managed session retained for teardown"
 
     await server.close_session(sid)

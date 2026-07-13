@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 from contextlib import asynccontextmanager
 from typing import Any
@@ -108,7 +109,12 @@ _PYTHON_TYPE_FROM_JSON: dict[str, type] = {
 
 
 def _mcp_display_name(server: str, tool: str) -> str:
-    return f"mcp:{server}:{tool}"
+    # LLM tool-calling APIs require names matching ^[a-zA-Z0-9_-]{1,128}$
+    # (Anthropic/OpenAI reject colons), so sanitize non-conforming chars to
+    # underscores. The original tool name is still used for the actual MCP
+    # call (see _MCPTool._tool_name); this only affects the name the model sees.
+    raw = f"mcp_{server}_{tool}"
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", raw)[:128]
 
 
 def _params_from_input_schema(schema: dict[str, Any]) -> dict[str, type]:
