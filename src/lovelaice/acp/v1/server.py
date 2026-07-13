@@ -82,7 +82,12 @@ class AcpServerV1(acp.Agent):
                           mcp_servers=None, **kw: Any) -> acp.NewSessionResponse:
         from lovelaice.mcp import build_agent_tools
         specs = self._mcp_specs_from_acp(mcp_servers)
-        mcp_tools, sessions = build_agent_tools(specs) if specs else ([], [])
+        # build_agent_tools is blocking (spawns per-server threads and waits
+        # for them to connect). Run it off the event loop so the ACP server
+        # keeps handling I/O while MCP servers come up.
+        mcp_tools, sessions = (
+            await asyncio.to_thread(build_agent_tools, specs)
+            if specs else ([], []))
         agent = self._agent_factory(mcp_tools=mcp_tools)
         sid = uuid.uuid4().hex[:16]
         agent.subscribe(lambda ev, _sid=sid: self._emit(_sid, ev))
