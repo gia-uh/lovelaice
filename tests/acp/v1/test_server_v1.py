@@ -165,6 +165,41 @@ async def test_new_session_attaches_mcp_tools_and_close_tears_down(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_prompt_surfaces_token_usage(tmp_path):
+    from lovelaice.agent.events import AssistantMessageFinalized
+
+    class _Usage:
+        prompt_tokens, completion_tokens, total_tokens = 100, 20, 120
+
+    class _UsageMsg:
+        content = "answer"
+        usage = _Usage()
+
+    class _Ag:
+        def __init__(self):
+            self._subs = []
+
+        def subscribe(self, fn):
+            self._subs.append(fn)
+
+        async def prompt(self, text):
+            for fn in self._subs:
+                fn(AssistantMessageFinalized(message=_UsageMsg()))
+            from lovelaice.agent.errors import StopReason
+            return StopReason.END_TURN
+
+    server = AcpServerV1(agent_factory=lambda **kw: _Ag())
+    server.on_connect(_FakeConn())
+    new = await server.new_session(cwd=str(tmp_path))
+    resp = await server.prompt(
+        prompt=[{"type": "text", "text": "hi"}], session_id=new.session_id)
+    assert resp.usage is not None
+    assert resp.usage.input_tokens == 100
+    assert resp.usage.output_tokens == 20
+    assert resp.usage.total_tokens == 120
+
+
+@pytest.mark.asyncio
 async def test_prompt_returns_stop_reason(tmp_path):
     server = AcpServerV1(agent_factory=_real_agent_factory(tmp_path))
     server.on_connect(_FakeConn())

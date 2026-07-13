@@ -37,6 +37,8 @@ class AcpServerV1(acp.Agent):
         self._inflight: asyncio.Task | None = None
         # session_id -> list[ManagedMcpSession] to tear down on close.
         self._mcp_sessions: dict[str, list] = {}
+        # Per-turn token accumulators (reset at the start of each prompt).
+        self._acc_in = self._acc_out = self._acc_total = 0
 
     def on_connect(self, conn: acp.Client) -> None:
         self._conn = conn
@@ -109,17 +111,29 @@ class AcpServerV1(acp.Agent):
             raise acp.RequestError(
                 code=-32602, message=f"unknown sessionId: {session_id}")
         self._loop = asyncio.get_running_loop()
+        self._acc_in = self._acc_out = self._acc_total = 0
         text = self._prompt_text(prompt)
         task = asyncio.ensure_future(agent.prompt(text))
         self._inflight = task
         try:
             stop = await task
         except asyncio.CancelledError:
-            return acp.PromptResponse(stop_reason="cancelled")
+            return acp.PromptResponse(stop_reason="cancelled",
+                                      usage=self._build_usage())
         finally:
             self._inflight = None
         value = getattr(stop, "value", None) or str(stop)
-        return acp.PromptResponse(stop_reason=value)
+        return acp.PromptResponse(stop_reason=value, usage=self._build_usage())
+
+    def _build_usage(self):
+        if not (self._acc_in or self._acc_out or self._acc_total):
+            return None
+        from acp.schema import Usage
+        return Usage(
+            input_tokens=self._acc_in,
+            output_tokens=self._acc_out,
+            total_tokens=self._acc_total or (self._acc_in + self._acc_out),
+        )
 
     @staticmethod
     def _prompt_text(prompt) -> str:
@@ -149,6 +163,12 @@ class AcpServerV1(acp.Agent):
     # -- event translation --------------------------------------------------
 
     def _emit(self, session_id: str, ev: Any) -> None:
+        if isinstance(ev, AssistantMessageFinalized):
+            u = getattr(ev.message, "usage", None)
+            if u is not None:
+                self._acc_in += int(getattr(u, "prompt_tokens", 0) or 0)
+                self._acc_out += int(getattr(u, "completion_tokens", 0) or 0)
+                self._acc_total += int(getattr(u, "total_tokens", 0) or 0)
         update = self._translate(ev)
         if update is None or self._conn is None:
             return
