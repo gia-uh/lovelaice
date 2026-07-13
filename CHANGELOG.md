@@ -1,3 +1,15 @@
+## 2.9.0 — 2026-07-13
+
+### Added
+
+- **Full native coding toolset.** The default `lovelaice-acp` coding agent now
+  wires `write`, `edit`, `glob`, and `list_dir` alongside the existing `read`
+  and `bash` — on par with the basic toolset of other harnesses. New coding-host
+  tool wrappers (`coding/tools/{write,edit,glob,list_dir}.py`) delegate to the
+  already-robust `lovelaice.tools.files`/`search` logic (parent-dir creation,
+  unique-match edit, `.gitignore`-aware glob). The cwd `path_guard` now also
+  covers `list_dir`. No subagents, no skills.
+
 ## 2.8.0 — 2026-07-12
 
 ### Added
