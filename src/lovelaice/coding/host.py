@@ -6,12 +6,18 @@ from lovelaice.agent import Agent, AgentConfig, AgentTool
 from lovelaice.agent.loops.react_native import ReActNative
 from lovelaice.coding.tools.read import read as read_tool
 from lovelaice.coding.tools.bash import bash as bash_tool
+from lovelaice.coding.tools.write import write as write_tool
+from lovelaice.coding.tools.edit import edit as edit_tool
+from lovelaice.coding.tools.glob import glob as glob_tool
+from lovelaice.coding.tools.list_dir import list_dir as list_dir_tool
 from lovelaice.coding.hooks import path_guard, bash_prefix_guard
 
 
 CODING_PREAMBLE = (
-    "You are a coding agent. You can read files and run bash commands.\n"
-    "Prefer reading before writing; explain your steps."
+    "You are a coding agent. You can read, write, and edit files, glob and "
+    "list directories, and run bash commands.\n"
+    "Prefer reading before writing; use `edit` for surgical in-file changes "
+    "and `write` for new files or full rewrites; explain your steps."
 )
 
 
@@ -42,6 +48,10 @@ def create_coding_agent(
         AgentTool(inner=read_tool, kind="read", title_template="Reading {path}"),
         AgentTool(inner=bash_tool, sequential=True, kind="execute",
                   title_template="Running shell"),
+        AgentTool(inner=write_tool, kind="edit", title_template="Writing {path}"),
+        AgentTool(inner=edit_tool, kind="edit", title_template="Editing {path}"),
+        AgentTool(inner=glob_tool, kind="search", title_template="Globbing {pattern}"),
+        AgentTool(inner=list_dir_tool, kind="search", title_template="Listing {path}"),
         *(extra_tools or []),
     ]
     agent = Agent(config=cfg, tools=tools, loop=ReActNative(),

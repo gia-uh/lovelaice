@@ -12,8 +12,8 @@ BAD_BASH_PREFIXES = (
 
 
 def path_guard(call, *, cwd: str):
-    """Block read/write/edit calls whose `path` argument is outside cwd."""
-    if call.name not in ("read", "write", "edit"):
+    """Block read/write/edit/list_dir calls whose `path` argument is outside cwd."""
+    if call.name not in ("read", "write", "edit", "list_dir"):
         return None
     path = call.arguments.get("path")
     if path is None:
