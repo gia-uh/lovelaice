@@ -15,7 +15,7 @@ from lovelaice.acp.v1.server import AcpServerV1
 from lovelaice.coding.host import create_coding_agent
 
 
-def _default_factory(*, mcp_tools=None, **_kw):
+def _default_factory(*, mcp_tools=None, session_path=None, **_kw):
     if os.getenv("LOVELAICE_FAKE_LLM"):
         from unittest.mock import AsyncMock
         from lingo.llm import Message
@@ -24,7 +24,9 @@ def _default_factory(*, mcp_tools=None, **_kw):
         fake.chat = AsyncMock(
             return_value=Message.assistant("ok", stop_reason="stop"))
         agent_mod._build_llm = lambda cfg: fake
-    session_path = Path(os.getenv(
+    # Per-session path from the server (enables load_session resume); fall
+    # back to the env default for standalone / one-shot use.
+    session_path = Path(session_path or os.getenv(
         "LOVELAICE_SESSION_PATH",
         str(Path.home() / ".lovelaice" / "sessions" / "ad-hoc.jsonl")))
     session_path.parent.mkdir(parents=True, exist_ok=True)

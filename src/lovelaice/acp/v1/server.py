@@ -8,7 +8,9 @@ Clean-room replacement for the legacy hand-rolled ``lovelaice.acp.server``
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
+from pathlib import Path
 from typing import Any, Callable
 
 import acp
@@ -53,7 +55,7 @@ class AcpServerV1(acp.Agent):
         return acp.InitializeResponse(
             protocol_version=acp.PROTOCOL_VERSION,
             agent_capabilities=AgentCapabilities(
-                load_session=False,
+                load_session=True,
                 prompt_capabilities=PromptCapabilities(
                     image=False, audio=False, embedded_context=False,
                 ),
@@ -84,22 +86,46 @@ class AcpServerV1(acp.Agent):
                               "args": get("args") or [], "env": get("env")})
         return specs
 
-    async def new_session(self, cwd: str, additional_directories=None,
-                          mcp_servers=None, **kw: Any) -> acp.NewSessionResponse:
+    @staticmethod
+    def _session_path_for(sid: str) -> str:
+        """Deterministic per-session-id jsonl path. Derivable from the id
+        alone so `load_session` re-attaches to the same conversation even in
+        a fresh subprocess. Honors LOVELAICE_SESSIONS_DIR."""
+        base = Path(os.getenv(
+            "LOVELAICE_SESSIONS_DIR",
+            str(Path.home() / ".lovelaice" / "acp-sessions")))
+        return str(base / f"{sid}.jsonl")
+
+    async def _build_session(self, sid: str, mcp_servers) -> None:
+        """Connect MCP servers, build the agent on the per-sid session path,
+        subscribe, and register. Shared by new_session and load_session; the
+        agent restores prior context automatically when the jsonl exists."""
         from lovelaice.mcp import build_agent_tools
         specs = self._mcp_specs_from_acp(mcp_servers)
-        # build_agent_tools is blocking (spawns per-server threads and waits
-        # for them to connect). Run it off the event loop so the ACP server
-        # keeps handling I/O while MCP servers come up.
+        # build_agent_tools blocks on per-server connect threads — run it off
+        # the event loop so the ACP server keeps handling I/O.
         mcp_tools, sessions = (
             await asyncio.to_thread(build_agent_tools, specs)
             if specs else ([], []))
-        agent = self._agent_factory(mcp_tools=mcp_tools)
-        sid = uuid.uuid4().hex[:16]
+        agent = self._agent_factory(
+            mcp_tools=mcp_tools, session_path=self._session_path_for(sid))
         agent.subscribe(lambda ev, _sid=sid: self._emit(_sid, ev))
         self._sessions[sid] = agent
         self._mcp_sessions[sid] = sessions
+
+    async def new_session(self, cwd: str, additional_directories=None,
+                          mcp_servers=None, **kw: Any) -> acp.NewSessionResponse:
+        sid = uuid.uuid4().hex[:16]
+        await self._build_session(sid, mcp_servers)
         return acp.NewSessionResponse(session_id=sid)
+
+    async def load_session(self, cwd: str, session_id: str,
+                           additional_directories=None, mcp_servers=None,
+                           **kw: Any):
+        # Rebuild an agent on the same deterministic session path; Agent's
+        # Session.load restores prior conversation context.
+        await self._build_session(session_id, mcp_servers)
+        return acp.LoadSessionResponse()
 
     async def _teardown_mcp(self, session_id: str) -> None:
         for s in self._mcp_sessions.pop(session_id, []):

@@ -18,8 +18,7 @@ async def test_initialize_advertises_protocol_v1():
     resp = await server.initialize(protocol_version=1)
     assert isinstance(resp, acp.InitializeResponse)
     assert resp.protocol_version == 1
-    # load_session is a VS4 capability — advertised False for now.
-    assert resp.agent_capabilities.load_session is False
+    assert resp.agent_capabilities.load_session is True
 
 
 class _FakeAgent:
@@ -28,6 +27,25 @@ class _FakeAgent:
 
     def subscribe(self, fn):
         self.subscribers.append(fn)
+
+
+@pytest.mark.asyncio
+async def test_load_session_rebuilds_on_same_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOVELAICE_SESSIONS_DIR", str(tmp_path))
+    paths = []
+
+    def factory(*, mcp_tools=None, session_path=None, **kw):
+        paths.append(session_path)
+
+        class _A:
+            def subscribe(self, fn): pass
+        return _A()
+
+    server = AcpServerV1(agent_factory=factory)
+    new = await server.new_session(cwd=str(tmp_path))
+    await server.load_session(cwd=str(tmp_path), session_id=new.session_id)
+    assert paths[0] is not None and paths[0] == paths[1]
+    assert str(new.session_id) in paths[0]
 
 
 @pytest.mark.asyncio
