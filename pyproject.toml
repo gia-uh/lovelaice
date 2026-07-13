@@ -1,6 +1,6 @@
 [project]
 name = "lovelaice"
-version = "2.10.0"
+version = "2.11.0"
 description = "A local-first coding agent for the terminal, built on a native tool-calling ReAct engine."
 readme = "README.md"
 authors = [

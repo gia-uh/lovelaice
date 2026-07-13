@@ -1,3 +1,19 @@
+## 2.11.0 — 2026-07-13
+
+### Added
+
+- **Streaming assistant output over ACP v1.** A new `AssistantMessageDelta`
+  event is emitted per content token (via lingo's `on_token`); the ACP v1 server
+  streams these as incremental `AgentMessageChunk`s. The finalized message emits
+  its content only as a fallback when nothing streamed. Additive — other
+  consumers ignore the new event.
+- **`load_session` (conversation resume).** Each ACP session gets a deterministic
+  `~/.lovelaice/acp-sessions/<session_id>.jsonl` path (override with
+  `LOVELAICE_SESSIONS_DIR`); `load_session` rebuilds the agent on that path so
+  prior context is restored — even across subprocess restarts. `load_session` is
+  now advertised in the agent capabilities. The default factory accepts a
+  per-session `session_path`.
+
 ## 2.10.0 — 2026-07-13
 
 ### Added
