@@ -1,10 +1,19 @@
 # Lovelaice
 
-A sovereign, local-first coding agent for the terminal. Single ReAct
-loop over a small built-in tool set, yolo by default. Two modes:
+A sovereign, local-first coding agent for the terminal. A native
+tool-calling ReAct loop (read/bash/write/edit/glob/list_dir), yolo by default.
+Three ways to run it:
 
-- **Interactive** — full-screen Textual TUI: `lovelaice`
-- **One-shot**   — streams to stdout and exits: `lovelaice <prompt>`
+- **One-shot** — streams to stdout and exits: `lovelaice "<prompt>"` (piped
+  stdin works too).
+- **ACP server** — `lovelaice-acp` speaks the official
+  [Agent Client Protocol](https://agentclientprotocol.com) v1 over stdio, so any
+  ACP client (e.g. [aegis](https://github.com/apiad/aegis), Zed) can drive
+  lovelaice as a native, harness-free agent — local or direct-API models, no
+  external CLI. Supports streaming, per-session MCP tools, token usage, and
+  `load_session` resume. See `know-how/acp-v1-server.md`.
+- **Library** — `lovelaice.agent.Agent` / `lovelaice.coding.create_coding_agent`
+  embed the engine directly.
 
 ## Install
 
