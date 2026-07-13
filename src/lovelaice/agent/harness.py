@@ -38,6 +38,13 @@ class Harness:
         repair_context: str = "turn",
     ):
         self.llm = llm
+        # Stream content tokens as AssistantMessageDelta events. lingo's LLM
+        # invokes `_on_token(token)` per content token when set. Guarded for
+        # non-lingo / mocked llms in tests.
+        try:
+            self.llm._on_token = self._emit_token_delta
+        except Exception:  # noqa: BLE001
+            pass
         self.tools = tools
         self.hooks = hooks
         self.system_prompt = system_prompt
@@ -49,6 +56,10 @@ class Harness:
         # Set by Agent after the session is built; enables in-session arg-rewrite
         # when a repair succeeds. None on the bare-harness (test) path.
         self.session: Any | None = None
+
+    def _emit_token_delta(self, token: str) -> None:
+        from lovelaice.agent.events import AssistantMessageDelta
+        self.emit(AssistantMessageDelta(text=token))
 
     def subscribe(self, fn: Callable[[Any], Any]) -> None:
         """Register an event subscriber. Sync or async callables both work."""

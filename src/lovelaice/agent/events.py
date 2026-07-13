@@ -27,6 +27,14 @@ class TurnEnd(AgentEvent):
 
 
 @dataclass
+class AssistantMessageDelta(AgentEvent):
+    """One streamed content token from the current assistant message. Emitted
+    per token when the LLM streams (via lingo's on_token). Additive: consumers
+    that don't stream simply ignore it and use AssistantMessageFinalized."""
+    text: str
+
+
+@dataclass
 class AssistantMessageFinalized(AgentEvent):
     message: Any  # lingo.Message — typed loosely here to avoid import cycle
 
