@@ -23,11 +23,13 @@ async def test_cli_one_shot_prints_final_text(monkeypatch, tmp_path, capsys):
             session_path=session_path,
         )
 
-    # Stub the coding host until B15 lands.
+    # Stub the coding host. Use monkeypatch.setitem so sys.modules is
+    # RESTORED after the test — a raw assignment leaks the stub module and
+    # breaks any later test that imports the real create_coding_agent.
     import sys, types
     fake_module = types.ModuleType("lovelaice.coding.host")
     fake_module.create_coding_agent = stub_create_coding_agent
-    sys.modules["lovelaice.coding.host"] = fake_module
+    monkeypatch.setitem(sys.modules, "lovelaice.coding.host", fake_module)
 
     stop = await run_one_shot(
         prompt="hi",
