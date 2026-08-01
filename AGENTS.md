@@ -39,7 +39,27 @@ was **retired 2026-07-03** — do not look for it.
   The legacy `server.py` (`AcpServer`) / `client.py` (`InProcessAcpClient`) /
   `protocol.py` implement an older hand-rolled "0.1" flat dialect and are
   **frozen** — warden spawns the `AcpServer` class directly and pins
-  `lovelaice>=2.6,<3`; do not edit them. See `know-how/acp-v1-server.md`.
+  `lovelaice>=2.6,<3`. See `know-how/acp-v1-server.md`.
+
+  **What "frozen" means, precisely** (qualified 2026-08-01): the freeze exists
+  to protect warden, its only consumer. So it forbids **changing or removing
+  anything already on the wire** — an existing notification's shape, a method's
+  semantics, a field's meaning. It does **not** forbid a purely **additive**
+  notification that warden itself needs, since warden cannot be broken by a
+  message it did not previously receive.
+
+  Adding one is still a deliberate act, not a loophole. Before you do: confirm
+  no existing notification changes, run the whole ACP suite, and check whether
+  **v1 already provides it** — v1 is the current server and usually does. If v1
+  has it, the honest fix may be to migrate the consumer rather than to extend
+  the legacy dialect; weigh that first and say why you chose otherwise.
+
+  Precedent: 2.12.0 added `sessionUpdate: "usage"` here (13 lines, no existing
+  branch touched) because warden needed per-turn token cost for the AInBox
+  audit log and speaks only this dialect. v1 had already shipped the same data
+  in `PromptResponse.usage`, so the real resolution is
+  **[warden → ACP v1](https://github.com/syalia-srl/ainbox) migration**, tracked
+  in ainbox's `tasks.md`; this was the additive stopgap, chosen deliberately.
 - `src/lovelaice/coding/` — the coding **host**. `host.py`'s
   `create_coding_agent(model, session_path, cwd, base_url, api_key, extra_tools)`
   wires the full `coding/tools/` set (`read`, `bash`, `write`, `edit`, `glob`,
