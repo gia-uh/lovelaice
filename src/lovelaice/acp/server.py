@@ -77,6 +77,19 @@ class AcpServer:
                     "sessionUpdate": "agent_message_chunk",
                     "content": {"type": "text", "text": text},
                 })
+            # Usage is captured per message and written to the JSONL session
+            # log (agent/session.py), but never crossed the wire — an ACP
+            # consumer had no way to cost a turn. Outside the `if text:` guard
+            # on purpose: a turn ending in tool calls has no assistant text
+            # and would otherwise report as free.
+            usage = getattr(ev.message, "usage", None)
+            if usage is not None:
+                self._notify("session/update", {
+                    "sessionId": sid,
+                    "sessionUpdate": "usage",
+                    "usage": usage.model_dump()
+                             if hasattr(usage, "model_dump") else dict(usage),
+                })
         elif isinstance(ev, ToolExecutionStart):
             self._notify("session/update", {
                 "sessionId": sid,

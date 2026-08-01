@@ -1,7 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock
-from lingo.llm import Message
+from lingo.llm import Message, Usage
 from lovelaice.agent import Agent, AgentConfig, AgentTool
+from lovelaice.agent.events import AssistantMessageFinalized
 from lovelaice.agent.loops.react_native import ReActNative
 from lovelaice.acp.server import AcpServer
 from lovelaice.acp.protocol import (
@@ -205,3 +206,53 @@ async def test_conversation_archive_flips_flag(conv_store):
     fresh = await conv_store.get(conv.id)
     assert fresh is not None
     assert fresh.archived is True
+
+
+def _capture(server) -> list:
+    """Collect outbound notifications from `server` into a list."""
+    sink: list = []
+    server.on_notification(sink.append)
+    return sink
+
+
+def test_finalized_message_with_usage_emits_a_usage_update():
+    """lovelaice records usage per message; ACP consumers could not see it."""
+    server = AcpServer(agent_factory=_stub_agent_factory)
+    sink = _capture(server)
+    msg = Message.assistant("hello", stop_reason="stop")
+    msg.usage = Usage(prompt_tokens=10, completion_tokens=4, total_tokens=14)
+
+    server._agent_event_to_notification("s1", AssistantMessageFinalized(message=msg))
+
+    kinds = [n.params["sessionUpdate"] for n in sink]
+    assert "usage" in kinds
+    params = next(n.params for n in sink if n.params["sessionUpdate"] == "usage")
+    assert params["sessionId"] == "s1"
+    assert params["usage"] == {"prompt_tokens": 10, "completion_tokens": 4,
+                               "total_tokens": 14}
+
+
+def test_finalized_message_without_usage_emits_no_usage_update():
+    server = AcpServer(agent_factory=_stub_agent_factory)
+    sink = _capture(server)
+    msg = Message.assistant("hello", stop_reason="stop")
+    assert msg.usage is None
+
+    server._agent_event_to_notification("s1", AssistantMessageFinalized(message=msg))
+
+    assert "usage" not in [n.params["sessionUpdate"] for n in sink]
+
+
+def test_usage_is_emitted_for_a_textless_turn():
+    """A turn that ends in tool calls has no assistant text but still costs
+    tokens — emitting usage inside the `if text:` guard would report it free."""
+    server = AcpServer(agent_factory=_stub_agent_factory)
+    sink = _capture(server)
+    msg = Message.assistant("", stop_reason="tool_calls")
+    msg.usage = Usage(prompt_tokens=7, completion_tokens=0, total_tokens=7)
+
+    server._agent_event_to_notification("s1", AssistantMessageFinalized(message=msg))
+
+    kinds = [n.params["sessionUpdate"] for n in sink]
+    assert kinds == ["usage"]
+    assert sink[0].params["usage"]["total_tokens"] == 7
