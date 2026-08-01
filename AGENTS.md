@@ -60,6 +60,44 @@ was **retired 2026-07-03** — do not look for it.
   in `PromptResponse.usage`, so the real resolution is
   **[warden → ACP v1](https://github.com/syalia-srl/ainbox) migration**, tracked
   in ainbox's `tasks.md`; this was the additive stopgap, chosen deliberately.
+
+## Releasing — `make publish` is a trap, do not use it
+
+Releases go through **CI, not your laptop**. `.github/workflows/release.yaml`
+fires on `release: created`, runs the suite, then publishes with `uv publish`
+under `permissions: id-token: write` — that is **PyPI Trusted Publishing (OIDC)**,
+so there is no token anywhere and none is needed.
+
+The `publish` target in the `makefile` is stale and predates that. It runs
+`uv publish --token $(dotenv -f .env get PYPI_TOKEN)`, and no `.env` in this
+project has ever carried a `PYPI_TOKEN` — it dies with
+`error: a value is required for '--token <TOKEN>'`. Discovered 2026-08-01 while
+releasing 2.12.0.
+
+The actual procedure:
+
+```bash
+# 1. bump BOTH version strings — they have drifted before (see below)
+#    pyproject.toml `version` and src/lovelaice/__init__.py `__version__`
+# 2. CHANGELOG entry
+# 3. commit named paths, tag, push both
+git commit -m "chore: release X.Y.Z" -- pyproject.toml src/lovelaice/__init__.py CHANGELOG.md
+git tag vX.Y.Z && git push origin main && git push origin vX.Y.Z
+# 4. the release is what publishes — the tag alone does nothing
+gh release create vX.Y.Z -R gia-uh/lovelaice --title "vX.Y.Z" --notes-file <notes>
+```
+
+**Then verify against PyPI, not against the tag.** A pushed tag and a GitHub
+release both exist happily while nothing was published — that is exactly the
+state 2.12.0 sat in for a while:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://pypi.org/pypi/lovelaice/X.Y.Z/json   # want 200
+```
+
+> **The two version strings drift.** At 2.12.0, `pyproject.toml` was at `2.11.0`
+> while `__init__.py` still said `2.4.0` — seven minor versions stale, because
+> nothing checks them. Bump both, every time.
 - `src/lovelaice/coding/` — the coding **host**. `host.py`'s
   `create_coding_agent(model, session_path, cwd, base_url, api_key, extra_tools)`
   wires the full `coding/tools/` set (`read`, `bash`, `write`, `edit`, `glob`,
