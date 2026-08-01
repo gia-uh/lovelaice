@@ -1,3 +1,27 @@
+## 2.12.0 — 2026-08-01
+
+### Added
+
+- **Per-turn token `usage` over the legacy ACP dialect.** `AcpServer` now emits a
+  `session/update` with `sessionUpdate: "usage"` carrying `lingo.llm.Usage`
+  (`prompt_tokens` / `completion_tokens` / `total_tokens`) whenever a finalized
+  assistant message has usage. It was already captured per message and written to
+  the JSONL session log, but never crossed the wire, so an ACP consumer had no way
+  to cost a turn. Additive — no existing notification changed.
+
+  The emit sits **outside** the `if text:` guard on purpose: a turn that ends in
+  tool calls has no assistant text and would otherwise have reported as free.
+  Note that usage arrives **once per assistant message**, so a tool-looping turn
+  emits several and the consumer must sum them. (ACP **v1** already accumulated
+  this into `PromptResponse.usage`; this closes the gap only for the legacy
+  dialect, which is what AInBox's warden speaks.)
+
+### Fixed
+
+- `__version__` in `lovelaice/__init__.py` had drifted to `2.4.0` while
+  `pyproject.toml` was at `2.11.0` — seven minor versions stale. Both now track
+  the release.
+
 ## 2.11.0 — 2026-07-13
 
 ### Added
