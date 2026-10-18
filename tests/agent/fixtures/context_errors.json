@@ -1,0 +1,41 @@
+{
+ "_note": "Recorded verbatim from real providers through lingo 2.0.6 on 2026-10-17; do not hand-edit messages.",
+ "cases": [
+  {
+   "provider": "openrouter",
+   "model": "microsoft/phi-4",
+   "type": "BadRequestError",
+   "status_code": 400,
+   "message": "Error code: 400 - {'error': {'message': \"This endpoint's maximum context length is 16384 tokens. However, you requested about 25019 tokens (25003 of text input, 16 in the output). Please reduce the length of either one, or use the context-compression plugin to compress your prompt automatically.\", 'code': 400, 'metadata': {'provider_name': None}}}",
+   "is_context": true,
+   "prompt_tokens": 25003
+  },
+  {
+   "provider": "openrouter",
+   "model": "sao10k/l3-lunaris-8b",
+   "type": "AuthenticationError",
+   "status_code": 401,
+   "message": "Error code: 401 - {'error': {'message': 'Missing Authentication header', 'code': 401}}",
+   "is_context": false,
+   "prompt_tokens": null
+  },
+  {
+   "provider": "llama.cpp",
+   "model": "smollm",
+   "type": "BadRequestError",
+   "status_code": 400,
+   "message": "Error code: 400 - {'error': {'code': 400, 'message': 'request (8035 tokens) exceeds the available context size (2048 tokens), try increasing it', 'type': 'exceed_context_size_error', 'n_prompt_tokens': 8035, 'n_ctx': 2048}}",
+   "is_context": true,
+   "prompt_tokens": 8035
+  },
+  {
+   "provider": "unreachable endpoint",
+   "model": "smollm",
+   "type": "APIConnectionError",
+   "status_code": null,
+   "message": "Connection error.",
+   "is_context": false,
+   "prompt_tokens": null
+  }
+ ]
+}

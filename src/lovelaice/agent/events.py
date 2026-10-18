@@ -75,3 +75,27 @@ class ToolCallRepaired(AgentEvent):
 class SessionAppend(AgentEvent):
     entry_id: str
     entry_type: str
+
+
+@dataclass
+class ContextCompacted(AgentEvent):
+    """The view sent to the model was cut down. `report` is a
+    lovelaice.agent.budget.CompactionReport."""
+    report: Any
+
+
+@dataclass
+class ContextOverheadWarning(AgentEvent):
+    """The system prompt and tool schemas alone are over the usable window.
+    The call is sent anyway; the provider decides."""
+    fixed_tokens: int
+    usable: int
+
+
+@dataclass
+class ContextOverflow(AgentEvent):
+    """The provider refused the prompt even after compaction; the turn ends."""
+    message: str
+    fixed_tokens: int
+    usable: int | None
+    prompt_tokens: int | None

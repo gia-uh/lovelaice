@@ -6,9 +6,9 @@ Uses lingo's native tool-call wire (Message.tool_calls).
 from typing import Protocol
 
 from lingo.llm import Message
-from lovelaice.agent.errors import StopReason
+from lovelaice.agent.errors import ContextOverflowError, StopReason
 from lovelaice.agent.events import (
-    TurnStart, TurnEnd, AssistantMessageFinalized,
+    TurnStart, TurnEnd, AssistantMessageFinalized, ContextOverflow,
 )
 
 
@@ -60,7 +60,8 @@ class ReActNative:
     )
 
     async def run(self, harness, session, user_message: Message) -> StopReason:
-        session.append(user_message)
+        turn = max(session.turn_numbers(), default=0) + 1
+        session.append(user_message, turn=turn)
         harness.emit(TurnStart(
             turn_no=session.turn_count,
             model=getattr(harness.llm, "model", "?"),
@@ -73,12 +74,17 @@ class ReActNative:
                                      soft_terminate=False))
                 return StopReason.CANCELLED
 
-            messages = session.messages_for_llm(harness.system_prompt)
-            assistant = await harness.llm_call(
-                messages,
-                tools=harness.tools.lingo_tools() or None,
-            )
-            session.append(assistant)
+            try:
+                assistant = await harness.model_call(
+                    session, tools=harness.tools.lingo_tools() or None)
+            except ContextOverflowError as exc:
+                harness.emit(ContextOverflow(
+                    message=exc.message, fixed_tokens=exc.fixed_tokens,
+                    usable=exc.usable, prompt_tokens=exc.prompt_tokens))
+                harness.emit(TurnEnd(stop_reason=StopReason.REFUSAL,
+                                     soft_terminate=False))
+                return StopReason.REFUSAL
+            session.append(assistant, turn=turn)
             harness.emit(AssistantMessageFinalized(message=assistant))
 
             if not assistant.tool_calls:
@@ -94,7 +100,7 @@ class ReActNative:
                     harness.emit(TurnEnd(stop_reason=stop, soft_terminate=False))
                     return stop
                 empty_continuations += 1
-                session.append(Message.user(self.EMPTY_TURN_NUDGE))
+                session.append(Message.user(self.EMPTY_TURN_NUDGE), turn=turn)
                 continue
 
             # Productive tool-using turn — reset the empty-turn budget.
@@ -110,7 +116,8 @@ class ReActNative:
                        and "text" in result.content[0]
                     else ""
                 )
-                session.append(Message.tool(content_text, tool_call_id=call.id))
+                session.append(Message.tool(content_text, tool_call_id=call.id),
+                               turn=turn)
 
             if results and all(r.terminate for r in results):
                 harness.emit(TurnEnd(stop_reason=StopReason.END_TURN,

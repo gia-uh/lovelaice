@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, TYPE_CHECKING
 
 from lingo.llm import LLM, Message
+from lovelaice.agent.budget import BudgetConfig, ContextBudget
 from lovelaice.agent.events import AgentEvent
 from lovelaice.agent.harness import Harness
 from lovelaice.agent.hooks import HookRegistry
@@ -43,6 +44,18 @@ class AgentConfig:
     # models with native function-calling. On by default (no behaviour change);
     # ainbox turns it off because its tool descriptions are already one-liners.
     list_tools_in_prompt: bool = True
+    # The model's context window in tokens. None (the default) keeps today's
+    # behaviour: nothing is compacted unless the provider refuses a prompt.
+    context_window: int | None = None
+    # Compaction runs above `trigger` of the usable window and cuts to `target`.
+    compaction_trigger: float = 0.75
+    compaction_target: float = 0.5
+
+
+def _build_budget(cfg: AgentConfig) -> ContextBudget:
+    return ContextBudget(BudgetConfig(
+        window=cfg.context_window, max_tokens=cfg.max_tokens,
+        trigger=cfg.compaction_trigger, target=cfg.compaction_target, model=cfg.model))
 
 
 def _build_llm(cfg: AgentConfig) -> LLM:
@@ -83,7 +96,7 @@ class Agent:
         self.harness = Harness(
             llm=llm, tools=registry, hooks=hooks, system_prompt=sys_prompt,
             repair_tool_calls=config.repair_tool_calls,
-            repair_context=config.repair_context)
+            repair_context=config.repair_context, budget=_build_budget(config))
 
         # Build / load the session.
         path = Path(session_path)
@@ -132,7 +145,7 @@ class Agent:
         agent.harness = Harness(
             llm=llm, tools=registry, hooks=hooks, system_prompt=sys_prompt,
             repair_tool_calls=config.repair_tool_calls,
-            repair_context=config.repair_context)
+            repair_context=config.repair_context, budget=_build_budget(config))
 
         agent.session = _ConversationSessionAdapter(conversation, store)
         agent.harness.session = agent.session
@@ -198,6 +211,19 @@ class _ConversationSessionAdapter:
         self._messages: list[Message] = [
             _deserialise(m) for m in conversation.row.messages
         ]
+        self._turns: list[int | None] = [m.turn for m in conversation.row.messages]
+        from lovelaice.agent.compaction import CompactionState
+        self.compaction = getattr(conversation, "compaction", None) or CompactionState()
+
+    def save_compaction(self) -> None:
+        """Persist the compaction state in the store's own dict, fire-and-forget
+        like `append`. A snapshot is saved, so later cuts cannot race the write."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        asyncio.create_task(self._store.save_compaction(
+            self._conversation.id, self.compaction.model_copy(deep=True)))
 
     @property
     def turn_count(self) -> int:
@@ -206,15 +232,27 @@ class _ConversationSessionAdapter:
     def messages_for_llm(self, system_prompt: str) -> list[Message]:
         return [Message.system(system_prompt), *self._messages]
 
-    def append(self, msg: Message) -> dict:
+    def turn_numbers(self) -> list[int]:
+        """Turn number of each history message, in messages_for_llm order."""
+        from lovelaice.agent.loops.react_native import ReActNative
+        from lovelaice.agent.turns import assign_turns
+        items = [
+            (m.role, m.content if isinstance(m.content, str) else "", t)
+            for m, t in zip(self._messages, self._turns)
+        ]
+        return assign_turns(items, ReActNative.EMPTY_TURN_NUDGE)
+
+    def append(self, msg: Message, *, turn: int | None = None) -> dict:
         self._messages.append(msg)
+        self._turns.append(turn)
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             # No event loop — adapter is being used outside async context
             # (test, REPL). Skip persistence; in-memory append is enough.
             return {}
-        asyncio.create_task(self._store.append(self._conversation.id, msg))
+        asyncio.create_task(
+            self._store.append(self._conversation.id, msg, turn=turn))
         return {}
 
     def update_tool_call_args(self, call_id: str, new_args: dict) -> None:

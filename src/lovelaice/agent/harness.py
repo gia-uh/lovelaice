@@ -36,6 +36,7 @@ class Harness:
         abort: asyncio.Event | None = None,
         repair_tool_calls: bool = False,
         repair_context: str = "turn",
+        budget: Any | None = None,
     ):
         self.llm = llm
         # Stream content tokens as AssistantMessageDelta events. lingo's LLM
@@ -56,6 +57,11 @@ class Harness:
         # Set by Agent after the session is built; enables in-session arg-rewrite
         # when a repair succeeds. None on the bare-harness (test) path.
         self.session: Any | None = None
+        # The context budget runs before every model call (see model_call).
+        # With no window it changes nothing until a provider refuses.
+        from lovelaice.agent.budget import BudgetConfig, ContextBudget
+        self.budget = budget or ContextBudget(BudgetConfig(window=None))
+        self._warned_overhead = False
 
     def _emit_token_delta(self, token: str) -> None:
         from lovelaice.agent.events import AssistantMessageDelta
@@ -93,6 +99,120 @@ class Harness:
             if res is not None:
                 messages, tools = res
         return await self.llm.chat(messages, tools=tools)
+
+    async def model_call(self, session, tools: list | None = None) -> Message:
+        """One model call on the session's history, through the context budget.
+
+        Compacts the view when the budget says so, and on a context-length
+        refusal compacts harder and retries once. A second refusal raises
+        ContextOverflowError; any other provider error propagates unchanged.
+        """
+        import math
+        from lovelaice.agent.compaction import CHARS_PER_TOKEN, fixed_chars, view_chars
+        from lovelaice.agent.errors import ContextOverflowError
+        from lovelaice.agent.overflow import context_error_tokens, context_error_window
+
+        history = session.messages_for_llm(self.system_prompt)[1:]
+        turns = session.turn_numbers()
+        current_turn = turns[-1] if turns else 0
+        state = session.compaction
+        fixed = fixed_chars(self.system_prompt, tools)
+
+        async def prepare(target_tokens=None):
+            view, report = await self.budget.prepare(
+                system_prompt=self.system_prompt, tools=tools, history=history,
+                turns=turns, current_turn=current_turn, state=state,
+                summarize=self.summarizer(), target_tokens=target_tokens)
+            self._announce(report)
+            return view, report
+
+        view, report = await prepare()
+        try:
+            assistant = await self.llm_call(view, tools=tools)
+        except Exception as exc:
+            is_context, prompt_tokens = context_error_tokens(exc)
+            if not is_context:
+                raise
+            # The refusal is the first real token count for this view: let it
+            # calibrate the estimate, or text that tokenizes densely (CJK,
+            # base64) is undercounted and the retry resends the same prompt.
+            if prompt_tokens:
+                state.last_prompt_tokens = prompt_tokens
+                state.last_view_chars = fixed + view_chars(view)
+            usable = self.budget.config.usable
+            estimate = report.after_tokens if report else math.ceil(
+                (fixed + view_chars(view)) / CHARS_PER_TOKEN)
+            base = usable or context_error_window(exc) or prompt_tokens or estimate // 2
+            view, report = await prepare(target_tokens=int(0.40 * base))
+            try:
+                assistant = await self.llm_call(view, tools=tools)
+            except Exception as exc2:
+                again, prompt2 = context_error_tokens(exc2)
+                if not again:
+                    raise
+                fixed_tokens = math.ceil(fixed / CHARS_PER_TOKEN)
+                room = usable if usable is not None else context_error_window(exc2)
+                raise ContextOverflowError(
+                    _overflow_message(fixed_tokens, room), fixed_tokens=fixed_tokens,
+                    usable=usable, prompt_tokens=prompt2 or prompt_tokens) from exc2
+
+        usage = getattr(assistant, "usage", None)
+        if usage is not None and getattr(usage, "prompt_tokens", 0):
+            state.last_prompt_tokens = usage.prompt_tokens
+            state.last_view_chars = fixed + view_chars(view)
+        session.save_compaction()
+        return assistant
+
+    def _announce(self, report) -> None:
+        from lovelaice.agent.events import ContextCompacted, ContextOverheadWarning
+        if report is None:
+            return
+        if report.fixed_over and not self._warned_overhead:
+            self._warned_overhead = True
+            self.emit(ContextOverheadWarning(
+                fixed_tokens=report.fixed_tokens, usable=report.usable))
+        if report.cut:
+            self.emit(ContextCompacted(report=report))
+
+    async def quiet_chat(self, messages: list[Message], **kwargs) -> Message:
+        """A model call without tools whose tokens do not stream as deltas.
+
+        The summary call goes through the session's own model; streaming its
+        tokens would print the summary in the chat as if it were the answer."""
+        saved = {}
+        for attr in ("_on_token", "_on_reasoning_token"):
+            if hasattr(self.llm, attr):
+                saved[attr] = getattr(self.llm, attr)
+                setattr(self.llm, attr, None)
+        try:
+            return await self.llm.chat(messages, tools=None, **kwargs)
+        finally:
+            for attr, value in saved.items():
+                setattr(self.llm, attr, value)
+
+    def summarizer(self):
+        """The Summarizer the context budget calls for step 3."""
+        from lovelaice.agent.summarize import build_summary_request
+
+        async def summarize(previous, messages, cap):
+            # A thinking model asked to summarize can reason until it runs out of
+            # tokens and write nothing: Qwen 3.5 9B spent 4,096 tokens thinking
+            # and returned an empty answer. These two switch reasoning off on
+            # OpenRouter and in llama.cpp's Qwen templates. No max_tokens=cap
+            # either: the session's own limit applies and the budget clips the
+            # text to the cap.
+            request = build_summary_request(previous, messages, cap)
+            try:
+                reply = await self.quiet_chat(request, extra_body=_NO_REASONING)
+            except Exception as exc:
+                # An endpoint that rejects unknown body fields answers 400.
+                if getattr(exc, "status_code", None) != 400:
+                    raise
+                reply = await self.quiet_chat(request)
+            text = reply.content if isinstance(reply.content, str) else ""
+            return text.strip(), reply.usage
+
+        return summarize
 
     async def execute_tool(self, call) -> "Any":
         """Run one tool call end-to-end.
@@ -251,3 +371,19 @@ class Harness:
                 out.append(Message.assistant(content))
             # tool/system roles are intentionally skipped
         return out
+
+
+_NO_REASONING = {
+    "reasoning": {"enabled": False},
+    "chat_template_kwargs": {"enable_thinking": False},
+}
+
+
+def _overflow_message(fixed_tokens: int, room: int | None) -> str:
+    if room is None:
+        return (f"The prompt does not fit this model's context window: the system prompt "
+                f"and tools take about {fixed_tokens:,} tokens. Raise the model's context "
+                f"size or use fewer tools.")
+    return (f"The prompt does not fit this model's context window: the system prompt and "
+            f"tools take about {fixed_tokens:,} tokens and the window leaves {room:,} for "
+            f"the conversation. Raise the model's context size or use fewer tools.")
