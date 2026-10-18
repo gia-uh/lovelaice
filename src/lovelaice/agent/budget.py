@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
 from lingo.llm import Message, Usage
 
 from lovelaice.agent.compaction import (
-    CHARS_PER_TOKEN, CLIP_MARKER, CompactionState, _content_text, estimate_tokens,
+    CHARS_PER_TOKEN, CLIP_MARKER, CompactionState, Summary, _content_text, estimate_tokens,
     fixed_chars, render_view, stub_text, view_chars,
 )
 
@@ -37,6 +38,7 @@ class BudgetConfig:
     max_tokens: int | None = None
     trigger: float = 0.75
     target: float = 0.5
+    model: str = ""  # recorded on the summary
 
     @property
     def reserve(self) -> int:
@@ -155,7 +157,7 @@ class ContextBudget:
                     current -= saved
                     report.stubbed_current += 1
 
-        # Step 3 (summary) is wired in by the summary step.
+        # Step 3: fold old turns into the rolling summary.
         if current > target and summarize is not None:
             view, current = estimate()
             current = await self._summarize(
@@ -173,8 +175,35 @@ class ContextBudget:
         report.after_tokens = after
         return view, report
 
-    async def _summarize(self, **kw) -> int:
-        return kw["current"]
+    async def _summarize(self, *, history, turns, current_turn, state, summarize,
+                         report, current, estimate) -> int:
+        """Fold every finished turn but the last two into the rolling summary.
+        Returns the new estimate."""
+        start = state.summary.covers_through if state.summary else 0
+        last_folded = current_turn - 3
+        cut = next((p for p in range(start, len(history)) if turns[p] > last_folded),
+                   len(history))
+        if cut <= start:
+            return current
+        # The newly covered messages as the model last saw them (stubs and
+        # clips applied), without the old summary, which is passed separately.
+        bare = state.model_copy(update={"summary": None})
+        rendered = render_view("", history, bare)[1:]
+        folding = rendered[start:cut]
+        usable = self.config.usable
+        cap = min(1024, (usable if usable is not None else 2 * current) // 10)
+        previous = state.summary.text if state.summary else None
+        text, usage = await summarize(previous, folding, cap)
+        text = (text or "")[: cap * CHARS_PER_TOKEN]
+        state.summary = Summary(
+            text=text, covers_through=cut, turns_covered=max(turns[cut - 1], 0),
+            model=self.config.model, created_at=datetime.now(timezone.utc),
+            runs=(state.summary.runs + 1) if state.summary else 1)
+        report.turns_summarized = len({turns[p] for p in range(start, cut)})
+        report.summary = text
+        report.summary_usage = usage
+        _, current = estimate()
+        return current
 
     def _clip_largest(self, history, state, view, excess_tokens, report) -> None:
         start = state.summary.covers_through if state.summary else 0

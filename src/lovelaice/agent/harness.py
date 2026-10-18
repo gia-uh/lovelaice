@@ -94,6 +94,34 @@ class Harness:
                 messages, tools = res
         return await self.llm.chat(messages, tools=tools)
 
+    async def quiet_chat(self, messages: list[Message], **kwargs) -> Message:
+        """A model call without tools whose tokens do not stream as deltas.
+
+        The summary call goes through the session's own model; streaming its
+        tokens would print the summary in the chat as if it were the answer."""
+        saved = {}
+        for attr in ("_on_token", "_on_reasoning_token"):
+            if hasattr(self.llm, attr):
+                saved[attr] = getattr(self.llm, attr)
+                setattr(self.llm, attr, None)
+        try:
+            return await self.llm.chat(messages, tools=None, **kwargs)
+        finally:
+            for attr, value in saved.items():
+                setattr(self.llm, attr, value)
+
+    def summarizer(self):
+        """The Summarizer the context budget calls for step 3."""
+        from lovelaice.agent.summarize import build_summary_request
+
+        async def summarize(previous, messages, cap):
+            reply = await self.quiet_chat(
+                build_summary_request(previous, messages, cap), max_tokens=cap)
+            text = reply.content if isinstance(reply.content, str) else ""
+            return text.strip(), reply.usage
+
+        return summarize
+
     async def execute_tool(self, call) -> "Any":
         """Run one tool call end-to-end.
 
