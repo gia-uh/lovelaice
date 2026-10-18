@@ -20,6 +20,7 @@ from lovelaice.acp.protocol import (
 )
 from lovelaice.agent.events import (
     AssistantMessageFinalized, ToolExecutionStart, ToolExecutionEnd,
+    ContextCompacted, ContextOverheadWarning, ContextOverflow,
 )
 
 
@@ -110,6 +111,48 @@ class AcpServer:
                 "toolCallId": ev.call_id,
                 "status": "failed" if ev.is_error else "completed",
                 "content": [{"type": "text", "text": text_content}],
+            })
+        # `context` is additive (2.14.0), like `usage` in 2.12.0: warden speaks
+        # only this dialect and needs to show compaction and overflow.
+        elif isinstance(ev, ContextCompacted):
+            r = ev.report
+            self._notify("session/update", {
+                "sessionId": sid,
+                "sessionUpdate": "context",
+                "event": "compacted",
+                "before_tokens": r.before_tokens,
+                "after_tokens": r.after_tokens,
+                "usable": r.usable,
+                "fixed_tokens": r.fixed_tokens,
+                "stubbed": r.stubbed_finished + r.stubbed_current,
+                "turns_summarized": r.turns_summarized,
+                "clipped": r.clipped,
+                "summary": r.summary,
+            })
+            # The summary was a model call; report its cost like any other.
+            if r.summary_usage is not None:
+                self._notify("session/update", {
+                    "sessionId": sid,
+                    "sessionUpdate": "usage",
+                    "usage": r.summary_usage.model_dump(),
+                })
+        elif isinstance(ev, ContextOverheadWarning):
+            self._notify("session/update", {
+                "sessionId": sid,
+                "sessionUpdate": "context",
+                "event": "warning",
+                "fixed_tokens": ev.fixed_tokens,
+                "usable": ev.usable,
+            })
+        elif isinstance(ev, ContextOverflow):
+            self._notify("session/update", {
+                "sessionId": sid,
+                "sessionUpdate": "context",
+                "event": "overflow",
+                "fixed_tokens": ev.fixed_tokens,
+                "usable": ev.usable,
+                "prompt_tokens": ev.prompt_tokens,
+                "message": ev.message,
             })
 
     async def handle_request(self, req: JsonRpcRequest) -> JsonRpcResponse:

@@ -35,6 +35,12 @@ stay green — that is the warden compat guarantee. Only the `lovelaice-acp`
 *script* moved to v1; warden is unaffected. The warden migration onto v1 (and
 retirement of the legacy dialect) is deferred; until then, both coexist.
 
+Two additive notifications have been added to the legacy dialect, each because
+warden needed the data and speaks only this dialect: `usage` (2.12.0) and
+`context` (2.14.0, with `event` set to `compacted`, `warning` or `overflow`,
+emitted by the context budget). Neither changed an existing branch. v1 does not
+emit `context` yet, because nothing consumes it there.
+
 ## What v1 supports
 
 - **initialize** — advertises `PROTOCOL_VERSION` (int `1`), `load_session=True`.
