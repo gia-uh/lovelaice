@@ -165,3 +165,19 @@ async def test_forced_target_runs_under_trigger():
     c = case(h, t)
     view, rep = await budget.prepare(**c, target_tokens=200)
     assert rep is not None and rep.stubbed_finished == 1
+
+
+@pytest.mark.asyncio
+async def test_clip_picks_largest_message_as_rendered():
+    # An earlier 48k result was already clipped down; a new 48k result arrives.
+    h, t = conv([48_000])
+    c = case(h, t)
+    await budget.prepare(**c)
+    first = next(iter(c["state"].clipped))
+    h2 = h + [m for m in conv([48_000])[0][1:]]       # second batch, same turn
+    t2 = t + [t[-1]] * (len(h2) - len(h))
+    c2 = case(h2, t2, state=c["state"])
+    view, rep = await budget.prepare(**c2)
+    assert rep.clipped == 1
+    assert (len(h2) - 1) in c2["state"].clipped       # the new result, not `first`
+    assert rep.after_tokens <= 6144                   # one clip per run (spec §06)

@@ -139,5 +139,20 @@ async def test_summary_call_streams_nothing():
     text, usage = await harness.summarizer()(None, [Message.user("a"), Message.assistant("b")], 100)
     assert text == "the summary"
     assert not [e for e in events if isinstance(e, AssistantMessageDelta)]
-    assert llm.last_tools is None and llm.last_kwargs["max_tokens"] == 100
+    assert llm.last_tools is None
+    # A thinking model spends its token budget reasoning first. Capping the call
+    # at the summary size left Qwen 3.5 9B with an empty answer (live run,
+    # 2026-10-17); the session's own max_tokens applies and the text is clipped.
+    assert "max_tokens" not in llm.last_kwargs
     assert llm._on_token is not None          # streaming restored for the real answer
+
+
+@pytest.mark.asyncio
+async def test_empty_summary_folds_nothing():
+    async def empty(previous, messages, cap):
+        return "   ", None
+    h, t = long_conv(6)
+    c = case(h, t, summarize=empty)
+    view, rep = await budget.prepare(**c)
+    assert c["state"].summary is None
+    assert rep.turns_summarized == 0

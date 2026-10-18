@@ -194,7 +194,11 @@ class ContextBudget:
         cap = min(1024, (usable if usable is not None else 2 * current) // 10)
         previous = state.summary.text if state.summary else None
         text, usage = await summarize(previous, folding, cap)
-        text = (text or "")[: cap * CHARS_PER_TOKEN]
+        text = (text or "").strip()[: cap * CHARS_PER_TOKEN]
+        if not text:
+            # Folding into an empty summary would drop those turns outright.
+            report.summary_usage = usage
+            return current
         state.summary = Summary(
             text=text, covers_through=cut, turns_covered=max(turns[cut - 1], 0),
             model=self.config.model, created_at=datetime.now(timezone.utc),
@@ -208,16 +212,19 @@ class ContextBudget:
     def _clip_largest(self, history, state, view, excess_tokens, report) -> None:
         start = state.summary.covers_through if state.summary else 0
         stubbed = set(state.stubbed)
-        best, best_len = None, 0
+        # Largest as the model sees it now: a result clipped earlier is small
+        # in the view even though its stored text is not.
+        best, best_shown = None, 0
         for pos in range(start, len(history)):
-            m = history[pos]
             if pos in stubbed:
                 continue
-            n = len(_content_text(m))
-            if n > best_len:
-                best, best_len = pos, n
+            shown = (len(_content_text(history[pos]))
+                     - state.clipped.get(pos, 0) * CHARS_PER_TOKEN)
+            if shown > best_shown:
+                best, best_shown = pos, shown
         if best is None:
             return
+        best_len = len(_content_text(history[best]))
         marker = len(CLIP_MARKER.format(tokens=10**6))
         already = state.clipped.get(best, 0)
         remove = already + excess_tokens + math.ceil(marker / CHARS_PER_TOKEN) + 1

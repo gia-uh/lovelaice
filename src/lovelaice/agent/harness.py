@@ -189,8 +189,11 @@ class Harness:
         from lovelaice.agent.summarize import build_summary_request
 
         async def summarize(previous, messages, cap):
-            reply = await self.quiet_chat(
-                build_summary_request(previous, messages, cap), max_tokens=cap)
+            # No max_tokens=cap here: a thinking model spends its budget on
+            # reasoning first, and a cap at the summary's size left Qwen 3.5 9B
+            # with an empty answer. The session's own limit applies; the budget
+            # clips the text to the cap.
+            reply = await self.quiet_chat(build_summary_request(previous, messages, cap))
             text = reply.content if isinstance(reply.content, str) else ""
             return text.strip(), reply.usage
 

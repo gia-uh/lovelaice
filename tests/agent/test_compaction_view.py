@@ -112,3 +112,11 @@ def test_estimate_uses_last_prompt_tokens():
     assert estimate_tokens(24000, st) == 6000
     assert estimate_tokens(12000, st) == 3000
     assert estimate_tokens(8000, CompactionState()) == 2000
+
+
+def test_estimate_never_below_raw_chars():
+    # Live run, Qwen 3.5 9B: the provider counted 1,866 tokens for a view of
+    # 7,618 chars after a cut; last call was 3,860 tokens for 19,435 chars.
+    # Additive calibration said 906. Raw chars/4 (1,905) is the floor.
+    st = CompactionState(last_prompt_tokens=3860, last_view_chars=19435)
+    assert estimate_tokens(7618, st) >= 1905

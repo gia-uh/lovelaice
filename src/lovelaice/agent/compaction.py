@@ -70,11 +70,18 @@ def fixed_chars(system_prompt: str, tools: list | None) -> int:
 
 def estimate_tokens(view_chars: int, state: CompactionState) -> int:
     """Provider-calibrated estimate: the last reported prompt size plus the
-    character difference since, at CHARS_PER_TOKEN."""
+    character difference since, at CHARS_PER_TOKEN, never below the raw
+    CHARS_PER_TOKEN count.
+
+    The floor matters after a large cut. Text that tokenizes at more than four
+    characters per token makes the calibrated figure fall too far: on a live
+    Qwen 3.5 9B run it said 906 tokens where the provider counted 1,866, and
+    the raw count said 1,905."""
+    raw = math.ceil(view_chars / CHARS_PER_TOKEN)
     if state.last_prompt_tokens is not None and state.last_view_chars is not None:
         delta = view_chars - state.last_view_chars
-        return max(0, state.last_prompt_tokens + math.ceil(delta / CHARS_PER_TOKEN))
-    return math.ceil(view_chars / CHARS_PER_TOKEN)
+        return max(raw, state.last_prompt_tokens + math.ceil(delta / CHARS_PER_TOKEN))
+    return raw
 
 
 def _args_text(arguments: dict) -> str:
