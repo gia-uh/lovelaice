@@ -40,7 +40,7 @@ def hash_system_prompt(prompt: str) -> str:
     return "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
-def _serialise(msg: Message) -> MessageEntry:
+def _serialise(msg: Message, turn: int | None = None) -> MessageEntry:
     content = msg.content
     if hasattr(content, "model_dump"):
         content_payload = content.model_dump()
@@ -62,6 +62,7 @@ def _serialise(msg: Message) -> MessageEntry:
         thinking=msg.thinking,
         stop_reason=msg.stop_reason,
         usage=msg.usage.model_dump() if msg.usage else None,
+        turn=turn,
     )
 
 
@@ -133,11 +134,13 @@ class ConversationStore:
             return None
         return Conversation(row=row, store=self)
 
-    async def append(self, conversation_id: str, message: Message) -> None:
+    async def append(
+        self, conversation_id: str, message: Message, *, turn: int | None = None,
+    ) -> None:
         row = await self._dict.fetch(conversation_id, default=None)
         if row is None:
             raise KeyError(f"unknown conversation: {conversation_id}")
-        row.messages.append(_serialise(message))
+        row.messages.append(_serialise(message, turn))
         row.updated_at = _now()
         await self._dict.set(conversation_id, row)
 

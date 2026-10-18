@@ -26,6 +26,9 @@ class MessageEntry(BaseModel):
     thinking: str | None = None
     stop_reason: str | None = None
     usage: dict[str, Any] | None = None
+    # The prompt() call this message belongs to; None on rows stored before
+    # turn numbers existed (inferred on read, see lovelaice.agent.turns).
+    turn: int | None = None
 
 
 class ConversationRow(BaseModel):

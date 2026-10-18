@@ -131,3 +131,35 @@ async def test_agent_from_conversation_seeds_messages(tmp_path: Path):
         assert roles == ["system", "user", "assistant"]
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_turn_round_trips_through_store(store: ConversationStore):
+    conv = await store.create(model="m", system_prompt_hash="h")
+    await store.append(conv.id, Message.user("a"), turn=1)
+    await store.append(conv.id, Message.assistant("b"))
+    row = (await store.get(conv.id)).row
+    assert row.messages[0].turn == 1
+    assert row.messages[1].turn is None
+
+
+@pytest.mark.asyncio
+async def test_adapter_turn_numbers_follow_stored_and_appended(tmp_path: Path):
+    from lovelaice.agent import Agent, AgentConfig
+    from lovelaice.agent.loops.react_native import ReActNative
+
+    db = AsyncBeaverDB(str(tmp_path / "lovelaice.db"))
+    await db.connect()
+    try:
+        store = ConversationStore(db)
+        conv = await store.create(model="m", system_prompt_hash="h")
+        await store.append(conv.id, Message.user("old"))          # legacy: no turn
+        await store.append(conv.id, Message.assistant("ans"))
+        conv = await store.get(conv.id)
+        agent = Agent.from_conversation(
+            config=AgentConfig(model="m", api_key="fake"), tools=[],
+            loop=ReActNative(), conversation=conv, store=store)
+        agent.session.append(Message.user("new"), turn=2)
+        assert agent.session.turn_numbers() == [1, 1, 2]
+    finally:
+        await db.close()

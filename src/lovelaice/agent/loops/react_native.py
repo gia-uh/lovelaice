@@ -60,7 +60,8 @@ class ReActNative:
     )
 
     async def run(self, harness, session, user_message: Message) -> StopReason:
-        session.append(user_message)
+        turn = max(session.turn_numbers(), default=0) + 1
+        session.append(user_message, turn=turn)
         harness.emit(TurnStart(
             turn_no=session.turn_count,
             model=getattr(harness.llm, "model", "?"),
@@ -78,7 +79,7 @@ class ReActNative:
                 messages,
                 tools=harness.tools.lingo_tools() or None,
             )
-            session.append(assistant)
+            session.append(assistant, turn=turn)
             harness.emit(AssistantMessageFinalized(message=assistant))
 
             if not assistant.tool_calls:
@@ -94,7 +95,7 @@ class ReActNative:
                     harness.emit(TurnEnd(stop_reason=stop, soft_terminate=False))
                     return stop
                 empty_continuations += 1
-                session.append(Message.user(self.EMPTY_TURN_NUDGE))
+                session.append(Message.user(self.EMPTY_TURN_NUDGE), turn=turn)
                 continue
 
             # Productive tool-using turn — reset the empty-turn budget.
@@ -110,7 +111,8 @@ class ReActNative:
                        and "text" in result.content[0]
                     else ""
                 )
-                session.append(Message.tool(content_text, tool_call_id=call.id))
+                session.append(Message.tool(content_text, tool_call_id=call.id),
+                               turn=turn)
 
             if results and all(r.terminate for r in results):
                 harness.emit(TurnEnd(stop_reason=StopReason.END_TURN,

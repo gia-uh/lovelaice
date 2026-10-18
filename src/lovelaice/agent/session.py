@@ -25,7 +25,7 @@ def _msg_id() -> str:
     return f"msg_{uuid.uuid4().hex[:8]}"
 
 
-def _serialize_message(msg: Message) -> dict:
+def _serialize_message(msg: Message, turn: int | None = None) -> dict:
     """Convert a lingo.Message into a JSONL entry dict."""
     entry: dict = {
         "type": "message",
@@ -53,6 +53,8 @@ def _serialize_message(msg: Message) -> dict:
         entry["stop_reason"] = msg.stop_reason
     if msg.usage:
         entry["usage"] = msg.usage.model_dump()
+    if turn is not None:
+        entry["turn"] = turn
     return entry
 
 
@@ -134,8 +136,8 @@ class Session:
             )
         return cls(path, entries)
 
-    def append(self, msg: Message) -> dict:
-        entry = _serialize_message(msg)
+    def append(self, msg: Message, *, turn: int | None = None) -> dict:
+        entry = _serialize_message(msg, turn)
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
             f.flush()
@@ -166,6 +168,17 @@ class Session:
             1 for e in self._entries
             if e.get("type") == "message" and e.get("role") == "user"
         )
+
+    def turn_numbers(self) -> list[int]:
+        """Turn number of each history message, in messages_for_llm order."""
+        from lovelaice.agent.loops.react_native import ReActNative
+        from lovelaice.agent.turns import assign_turns
+        items = [
+            (e.get("role"), e.get("content") if isinstance(e.get("content"), str) else "",
+             e.get("turn"))
+            for e in self._entries if e.get("type") == "message"
+        ]
+        return assign_turns(items, ReActNative.EMPTY_TURN_NUDGE)
 
     def messages_for_llm(self, system_prompt: str) -> list[Message]:
         """Reconstruct the lingo.Message list to pass to LLM.chat.

@@ -198,6 +198,7 @@ class _ConversationSessionAdapter:
         self._messages: list[Message] = [
             _deserialise(m) for m in conversation.row.messages
         ]
+        self._turns: list[int | None] = [m.turn for m in conversation.row.messages]
 
     @property
     def turn_count(self) -> int:
@@ -206,15 +207,27 @@ class _ConversationSessionAdapter:
     def messages_for_llm(self, system_prompt: str) -> list[Message]:
         return [Message.system(system_prompt), *self._messages]
 
-    def append(self, msg: Message) -> dict:
+    def turn_numbers(self) -> list[int]:
+        """Turn number of each history message, in messages_for_llm order."""
+        from lovelaice.agent.loops.react_native import ReActNative
+        from lovelaice.agent.turns import assign_turns
+        items = [
+            (m.role, m.content if isinstance(m.content, str) else "", t)
+            for m, t in zip(self._messages, self._turns)
+        ]
+        return assign_turns(items, ReActNative.EMPTY_TURN_NUDGE)
+
+    def append(self, msg: Message, *, turn: int | None = None) -> dict:
         self._messages.append(msg)
+        self._turns.append(turn)
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             # No event loop — adapter is being used outside async context
             # (test, REPL). Skip persistence; in-memory append is enough.
             return {}
-        asyncio.create_task(self._store.append(self._conversation.id, msg))
+        asyncio.create_task(
+            self._store.append(self._conversation.id, msg, turn=turn))
         return {}
 
     def update_tool_call_args(self, call_id: str, new_args: dict) -> None:
