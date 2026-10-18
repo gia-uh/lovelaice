@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from beaver import AsyncBeaverDB
 from lingo.llm import Message, ToolCall
 
+from lovelaice.agent.compaction import CompactionState
 from lovelaice.agent.conversation_models import (
     ConversationMeta,
     ConversationRow,
@@ -89,6 +90,7 @@ class Conversation:
 
     row: ConversationRow
     store: "ConversationStore"
+    compaction: CompactionState = field(default_factory=CompactionState)
 
     @property
     def id(self) -> str:
@@ -110,6 +112,10 @@ class Conversation:
 class ConversationStore:
     def __init__(self, db: AsyncBeaverDB):
         self._dict = db.dict("conversations", model=ConversationRow)
+        # Compaction state lives in its own dict, keyed by conversation id:
+        # `append` rewrites the whole conversation row, and a second writer on
+        # that row would race it.
+        self._compaction = db.dict("conversation_compaction", model=CompactionState)
 
     async def create(
         self, *, model: str, system_prompt_hash: str
@@ -132,7 +138,11 @@ class ConversationStore:
         row = await self._dict.fetch(conversation_id, default=None)
         if row is None:
             return None
-        return Conversation(row=row, store=self)
+        state = await self._compaction.fetch(conversation_id, default=None)
+        return Conversation(row=row, store=self, compaction=state or CompactionState())
+
+    async def save_compaction(self, conversation_id: str, state: CompactionState) -> None:
+        await self._compaction.set(conversation_id, state)
 
     async def append(
         self, conversation_id: str, message: Message, *, turn: int | None = None,

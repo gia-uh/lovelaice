@@ -216,7 +216,14 @@ class _ConversationSessionAdapter:
         self.compaction = getattr(conversation, "compaction", None) or CompactionState()
 
     def save_compaction(self) -> None:
-        """Persisted per conversation in the store's own dict (task 6)."""
+        """Persist the compaction state in the store's own dict, fire-and-forget
+        like `append`. A snapshot is saved, so later cuts cannot race the write."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        asyncio.create_task(self._store.save_compaction(
+            self._conversation.id, self.compaction.model_copy(deep=True)))
 
     @property
     def turn_count(self) -> int:
