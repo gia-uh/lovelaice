@@ -109,9 +109,14 @@ class ContextBudget:
         report.fixed_over = usable is not None and report.fixed_tokens > usable
 
         if target_tokens is None:
-            if before <= self.config.trigger * usable:
+            # Trigger and target apply to the room the fixed part leaves. Taken
+            # over the whole usable window, a large fixed part put the target
+            # out of reach, and step 4 clipped the result the model had not
+            # read yet even when stubs alone would have fitted.
+            room = max(usable - report.fixed_tokens, 0)
+            if before <= report.fixed_tokens + self.config.trigger * room:
                 return view, (report if report.fixed_over else None)
-            target = int(self.config.target * usable)
+            target = int(report.fixed_tokens + self.config.target * room)
         else:
             target = target_tokens
 
@@ -168,10 +173,13 @@ class ContextBudget:
                 state=state, summarize=summarize, report=report,
                 current=current, estimate=estimate)
 
-        # Step 4: clip the single largest message.
-        if current > target:
+        # Step 4: clip the single largest message. It loses text the model may
+        # not have read, so it runs only when the cheaper steps left the prompt
+        # over the usable window (or over a forced retry target).
+        limit = target if target_tokens is not None or usable is None else usable
+        if current > limit:
             view, current = estimate()
-            if current > target:
+            if current > limit:
                 self._clip_largest(history, state, view, current - target, report)
 
         view, after = estimate()

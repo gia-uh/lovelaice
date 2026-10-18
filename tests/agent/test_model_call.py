@@ -187,3 +187,20 @@ async def test_provider_prompt_tokens_calibrate_the_estimate(tmp_path, monkeypat
     assert st.last_prompt_tokens == 1234
     assert st.last_view_chars == (fixed_chars(agent.harness.system_prompt, llm.calls[0].tools)
                                   + view_chars(llm.calls[0].messages))
+
+
+@pytest.mark.asyncio
+async def test_retry_calibrates_on_the_provider_prompt_size(tmp_path, monkeypatch):
+    # Review finding: densely tokenized text (CJK, base64) is undercounted by
+    # chars/4. The provider says 9,000 tokens for a view estimated at ~2,000;
+    # the retry must cut in real tokens, not resend the same prompt.
+    llm = ScriptedLLM([context_error(prompt_tokens=9000, n_ctx=8192),
+                       Message.assistant("ok", stop_reason="stop")])
+    agent, _ = make_agent(tmp_path, monkeypatch, llm)
+    seed(agent, [2000, 2000, 2000, 2000])
+    assert await agent.prompt("go") == StopReason.END_TURN
+    first, second = view_chars(llm.calls[0].messages), view_chars(llm.calls[1].messages)
+    # 9,000 real tokens -> target 0.4 * 6,144 = 2,457 real tokens: cut ~73%.
+    assert second <= first * 0.35
+    st = agent.session.compaction
+    assert st.last_prompt_tokens is not None

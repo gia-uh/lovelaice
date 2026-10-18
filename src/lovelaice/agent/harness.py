@@ -133,6 +133,12 @@ class Harness:
             is_context, prompt_tokens = context_error_tokens(exc)
             if not is_context:
                 raise
+            # The refusal is the first real token count for this view: let it
+            # calibrate the estimate, or text that tokenizes densely (CJK,
+            # base64) is undercounted and the retry resends the same prompt.
+            if prompt_tokens:
+                state.last_prompt_tokens = prompt_tokens
+                state.last_view_chars = fixed + view_chars(view)
             usable = self.budget.config.usable
             estimate = report.after_tokens if report else math.ceil(
                 (fixed + view_chars(view)) / CHARS_PER_TOKEN)

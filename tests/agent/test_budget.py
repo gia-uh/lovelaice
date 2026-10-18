@@ -181,3 +181,15 @@ async def test_clip_picks_largest_message_as_rendered():
     assert rep.clipped == 1
     assert (len(h2) - 1) in c2["state"].clipped       # the new result, not `first`
     assert rep.after_tokens <= 6144                   # one clip per run (spec §06)
+
+
+@pytest.mark.asyncio
+async def test_large_fixed_part_does_not_shred_the_latest_batch():
+    # Review finding: fixed ~3,500 tokens is over the 3,072 target, so the old
+    # target was unreachable and step 4 clipped the page the model had not read.
+    h, t = conv([8000, "answer"], [8000, "answer"], [8000])
+    c = case(h, t, system_prompt="s" * 14_000)
+    view, rep = await budget.prepare(**c)
+    assert rep.stubbed_finished == 2
+    assert rep.clipped == 0
+    assert rep.after_tokens <= 6144

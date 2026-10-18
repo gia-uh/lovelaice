@@ -198,7 +198,7 @@ async def test_summary_retries_plain_when_endpoint_rejects_the_extras():
 async def test_failing_summary_call_skips_step_3():
     async def broken(previous, messages, cap):
         raise RuntimeError("provider timeout")
-    h, t = long_conv(6)
+    h, t = long_conv(9)                          # still over usable after step 1
     c = case(h, t, summarize=broken)
     view, rep = await budget.prepare(**c)
     assert c["state"].summary is None and rep.turns_summarized == 0
