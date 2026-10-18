@@ -156,3 +156,50 @@ async def test_empty_summary_folds_nothing():
     view, rep = await budget.prepare(**c)
     assert c["state"].summary is None
     assert rep.turns_summarized == 0
+
+
+@pytest.mark.asyncio
+async def test_summary_call_turns_reasoning_off():
+    llm = StreamingLLM()
+    harness = Harness(llm=llm, tools=ToolRegistry(), hooks=HookRegistry(), system_prompt="S")
+    await harness.summarizer()(None, [Message.user("a")], 100)
+    # Qwen 3.5 9B with reasoning on spent 4,096 tokens thinking and wrote no
+    # summary (live, 2026-10-18); with these it answered in 24 tokens.
+    assert llm.last_kwargs["extra_body"] == {
+        "reasoning": {"enabled": False},
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+
+
+class RejectsExtraBody(StreamingLLM):
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    async def chat(self, messages, tools=None, **kwargs):
+        self.calls.append(kwargs)
+        if "extra_body" in kwargs:
+            err = Exception("Unrecognized request argument supplied: reasoning")
+            err.status_code = 400
+            raise err
+        return Message.assistant("plain summary")
+
+
+@pytest.mark.asyncio
+async def test_summary_retries_plain_when_endpoint_rejects_the_extras():
+    llm = RejectsExtraBody()
+    harness = Harness(llm=llm, tools=ToolRegistry(), hooks=HookRegistry(), system_prompt="S")
+    text, _ = await harness.summarizer()(None, [Message.user("a")], 100)
+    assert text == "plain summary"
+    assert len(llm.calls) == 2 and "extra_body" not in llm.calls[1]
+
+
+@pytest.mark.asyncio
+async def test_failing_summary_call_skips_step_3():
+    async def broken(previous, messages, cap):
+        raise RuntimeError("provider timeout")
+    h, t = long_conv(6)
+    c = case(h, t, summarize=broken)
+    view, rep = await budget.prepare(**c)
+    assert c["state"].summary is None and rep.turns_summarized == 0
+    assert rep.clipped == 1                      # step 4 still ran

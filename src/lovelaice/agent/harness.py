@@ -189,11 +189,20 @@ class Harness:
         from lovelaice.agent.summarize import build_summary_request
 
         async def summarize(previous, messages, cap):
-            # No max_tokens=cap here: a thinking model spends its budget on
-            # reasoning first, and a cap at the summary's size left Qwen 3.5 9B
-            # with an empty answer. The session's own limit applies; the budget
-            # clips the text to the cap.
-            reply = await self.quiet_chat(build_summary_request(previous, messages, cap))
+            # A thinking model asked to summarize can reason until it runs out of
+            # tokens and write nothing: Qwen 3.5 9B spent 4,096 tokens thinking
+            # and returned an empty answer. These two switch reasoning off on
+            # OpenRouter and in llama.cpp's Qwen templates. No max_tokens=cap
+            # either: the session's own limit applies and the budget clips the
+            # text to the cap.
+            request = build_summary_request(previous, messages, cap)
+            try:
+                reply = await self.quiet_chat(request, extra_body=_NO_REASONING)
+            except Exception as exc:
+                # An endpoint that rejects unknown body fields answers 400.
+                if getattr(exc, "status_code", None) != 400:
+                    raise
+                reply = await self.quiet_chat(request)
             text = reply.content if isinstance(reply.content, str) else ""
             return text.strip(), reply.usage
 
@@ -356,6 +365,12 @@ class Harness:
                 out.append(Message.assistant(content))
             # tool/system roles are intentionally skipped
         return out
+
+
+_NO_REASONING = {
+    "reasoning": {"enabled": False},
+    "chat_template_kwargs": {"enable_thinking": False},
+}
 
 
 def _overflow_message(fixed_tokens: int, room: int | None) -> str:

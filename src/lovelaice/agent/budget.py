@@ -13,6 +13,7 @@ touched.
 """
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -27,6 +28,8 @@ from lovelaice.agent.compaction import (
 
 # (previous summary, messages to fold, cap in tokens) -> (summary text, usage)
 Summarizer = Callable[[str | None, list[Message], int], Awaitable[tuple[str, Usage | None]]]
+
+log = logging.getLogger(__name__)
 
 # Step 4 never clips a message down below this many characters.
 MIN_CLIP_KEEP_CHARS = 400
@@ -193,7 +196,11 @@ class ContextBudget:
         usable = self.config.usable
         cap = min(1024, (usable if usable is not None else 2 * current) // 10)
         previous = state.summary.text if state.summary else None
-        text, usage = await summarize(previous, folding, cap)
+        try:
+            text, usage = await summarize(previous, folding, cap)
+        except Exception as exc:  # noqa: BLE001 — a failed summary must not fail the turn
+            log.warning("context budget: summary call failed, skipping step 3: %s", exc)
+            return current
         text = (text or "").strip()[: cap * CHARS_PER_TOKEN]
         if not text:
             # Folding into an empty summary would drop those turns outright.
