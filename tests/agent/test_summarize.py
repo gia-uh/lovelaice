@@ -203,3 +203,12 @@ async def test_failing_summary_call_skips_step_3():
     view, rep = await budget.prepare(**c)
     assert c["state"].summary is None and rep.turns_summarized == 0
     assert rep.clipped == 1                      # step 4 still ran
+
+
+def test_rolling_request_asks_for_one_merged_summary():
+    # Live, Qwen 3.5 9B: given "Previous summary" and "Conversation to add",
+    # the second summary covered only the new turns and dropped pages 1-3.
+    req = build_summary_request("PREV", [Message.user("x")], 300)
+    text = req[1].content
+    assert "Previous summary:\nPREV" in text
+    assert "one updated summary" in text and "keep everything" in text
