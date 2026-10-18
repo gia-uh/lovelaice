@@ -304,15 +304,30 @@ class AcpServer:
 
     async def run_stdio(self) -> None:
         """Read JSON-RPC lines from stdin; write responses + notifications to stdout."""
-        def write_notification(n: JsonRpcNotification):
-            sys.stdout.write(encode_message(n) + "\n")
+        def write_line(line: str) -> None:
+            sys.stdout.write(line + "\n")
             sys.stdout.flush()
-        self.on_notification(write_notification)
 
         loop = asyncio.get_event_loop()
         reader = asyncio.StreamReader()
         protocol = asyncio.StreamReaderProtocol(reader)
         await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+        await self.serve_lines(reader, write_line)
+
+    async def serve_lines(self, reader: asyncio.StreamReader,
+                          write_line: Callable[[str], Any]) -> None:
+        """Serve JSON-RPC lines from `reader` until EOF, writing to `write_line`.
+
+        session/prompt runs as a task so the loop keeps reading: a
+        session/cancel that arrives mid-turn must reach the running prompt.
+        Awaiting it inline left the cancel unread until the turn had ended by
+        itself. Other requests stay inline, in the order they arrive.
+        """
+        self.on_notification(lambda n: write_line(encode_message(n)))
+        running: set[asyncio.Task] = set()
+
+        async def answer(req: JsonRpcRequest) -> None:
+            write_line(encode_message(await self.handle_request(req)))
 
         while True:
             line = await reader.readline()
@@ -324,9 +339,14 @@ class AcpServer:
             except (ValueError, json.JSONDecodeError):
                 continue
             if isinstance(msg, JsonRpcRequest):
-                resp = await self.handle_request(msg)
-                sys.stdout.write(encode_message(resp) + "\n")
-                sys.stdout.flush()
+                if msg.method == "session/prompt":
+                    task = asyncio.create_task(answer(msg))
+                    running.add(task)
+                    task.add_done_callback(running.discard)
+                else:
+                    await answer(msg)
             elif isinstance(msg, JsonRpcNotification):
                 await self.handle_notification(msg)
             # Responses going inbound are ignored — we're the agent, not the client.
+        if running:
+            await asyncio.gather(*running, return_exceptions=True)

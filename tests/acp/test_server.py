@@ -1,3 +1,4 @@
+import contextlib
 import pytest
 from unittest.mock import AsyncMock
 from lingo.llm import Message, Usage
@@ -256,3 +257,68 @@ def test_usage_is_emitted_for_a_textless_turn():
     kinds = [n.params["sessionUpdate"] for n in sink]
     assert kinds == ["usage"]
     assert sink[0].params["usage"]["total_tokens"] == 7
+
+
+@pytest.mark.asyncio
+async def test_cancel_line_reaches_a_prompt_that_is_still_running(
+        monkeypatch, tmp_path):
+    """The line loop must keep reading while a prompt runs. It used to await
+    each request inline, so a session/cancel sat unread until the prompt had
+    finished by itself, and Stop did nothing (seen on a demo: 72 s)."""
+    import asyncio
+    import json
+
+    started = asyncio.Event()
+
+    async def slow_chat(*a, **kw):
+        started.set()
+        await asyncio.sleep(30)
+        return Message.assistant("too late", stop_reason="stop")
+
+    fake = AsyncMock()
+    fake.chat = AsyncMock(side_effect=slow_chat)
+    monkeypatch.setattr("lovelaice.agent.agent._build_llm", lambda cfg: fake)
+    agent = Agent(config=AgentConfig(model="m", system_prompt="SYS"), tools=[],
+                  loop=ReActNative(), session_path=tmp_path / "s.jsonl")
+    server = AcpServer(agent_factory=lambda: agent)
+
+    reader = asyncio.StreamReader()
+    out: list[dict] = []
+
+    def feed(obj):
+        reader.feed_data((json.dumps(obj) + "\n").encode())
+
+    loop_task = asyncio.create_task(
+        server.serve_lines(reader, lambda line: out.append(json.loads(line))))
+
+    async def response(rid):
+        for _ in range(500):
+            for o in out:
+                if o.get("id") == rid:
+                    return o
+            await asyncio.sleep(0.01)
+        raise AssertionError(f"no response {rid}; got {out}")
+
+    try:
+        await _drive(feed, response, started, tmp_path)
+    finally:
+        reader.feed_eof()
+        loop_task.cancel()
+        with contextlib.suppress(BaseException):
+            await asyncio.wait_for(loop_task, 5)
+
+
+async def _drive(feed, response, started, tmp_path):
+    import asyncio
+    feed({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    await response(1)
+    feed({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+          "params": {"cwd": str(tmp_path)}})
+    sid = (await response(2))["result"]["sessionId"]
+    feed({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+          "params": {"sessionId": sid, "prompt": [{"type": "text", "text": "hi"}]}})
+    await asyncio.wait_for(started.wait(), 5)
+    feed({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": sid}})
+
+    resp = await asyncio.wait_for(response(3), 3)
+    assert resp["result"]["stopReason"] == "cancelled"
