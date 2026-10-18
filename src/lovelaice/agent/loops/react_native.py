@@ -6,9 +6,9 @@ Uses lingo's native tool-call wire (Message.tool_calls).
 from typing import Protocol
 
 from lingo.llm import Message
-from lovelaice.agent.errors import StopReason
+from lovelaice.agent.errors import ContextOverflowError, StopReason
 from lovelaice.agent.events import (
-    TurnStart, TurnEnd, AssistantMessageFinalized,
+    TurnStart, TurnEnd, AssistantMessageFinalized, ContextOverflow,
 )
 
 
@@ -74,11 +74,16 @@ class ReActNative:
                                      soft_terminate=False))
                 return StopReason.CANCELLED
 
-            messages = session.messages_for_llm(harness.system_prompt)
-            assistant = await harness.llm_call(
-                messages,
-                tools=harness.tools.lingo_tools() or None,
-            )
+            try:
+                assistant = await harness.model_call(
+                    session, tools=harness.tools.lingo_tools() or None)
+            except ContextOverflowError as exc:
+                harness.emit(ContextOverflow(
+                    message=exc.message, fixed_tokens=exc.fixed_tokens,
+                    usable=exc.usable, prompt_tokens=exc.prompt_tokens))
+                harness.emit(TurnEnd(stop_reason=StopReason.REFUSAL,
+                                     soft_terminate=False))
+                return StopReason.REFUSAL
             session.append(assistant, turn=turn)
             harness.emit(AssistantMessageFinalized(message=assistant))
 

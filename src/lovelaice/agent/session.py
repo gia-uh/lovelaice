@@ -82,8 +82,15 @@ class Session:
     """Append-only JSONL session log. Linear, no branches."""
 
     def __init__(self, path: Path, entries: list[dict]):
+        from lovelaice.agent.compaction import CompactionState
         self.path = path
         self._entries = entries
+        # Compaction state for this log. In memory only: JSONL sessions are
+        # short-lived (workflow agent nodes, one-shot CLI runs).
+        self.compaction = CompactionState()
+
+    def save_compaction(self) -> None:
+        """Nothing to persist for a JSONL session; see __init__."""
 
     @classmethod
     def create(
