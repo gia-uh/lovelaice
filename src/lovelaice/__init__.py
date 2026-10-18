@@ -7,5 +7,5 @@ tool-calls). The CLI (`lovelaice.cli`) drives it via an in-process ACP client;
 from .agent import Agent, AgentConfig
 from .workflows import workflow
 
-__version__ = "2.14.0"
+__version__ = "2.14.1"
 __all__ = ["Agent", "AgentConfig", "workflow", "__version__"]

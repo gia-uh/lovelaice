@@ -1,3 +1,14 @@
+## 2.14.1 — 2026-10-18
+
+### Fixed
+
+- **`session/cancel` now stops a prompt that is still running.** The ACP stdio
+  loop awaited every request inline, so a cancel sent mid-turn was read only
+  after the prompt had ended by itself and Stop did nothing. `session/prompt`
+  now runs as a task while the loop keeps reading; other requests stay inline
+  and in order. The loop is `AcpServer.serve_lines(reader, write_line)`, and
+  `run_stdio` wires it to stdin and stdout.
+
 ## 2.14.0 — 2026-10-18
 
 ### Added
