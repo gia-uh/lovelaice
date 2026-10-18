@@ -1,3 +1,44 @@
+## 2.14.0 — 2026-10-18
+
+### Added
+
+- **Context budget: the prompt is compacted before it outgrows the model's
+  window.** `AgentConfig.context_window` (default `None`, which keeps today's
+  behaviour) turns on a budget that runs before every model call. Above
+  `compaction_trigger` (75%) of the usable window (window minus `max_tokens`, or
+  minus `min(2048, window // 4)`), it cuts the view sent to the model down to
+  `compaction_target` (50%) in four steps, cheapest first: tool results from
+  finished turns become one-line stubs that name the call; older results in the
+  current turn follow, keeping the batch the model has not answered; finished
+  turns but the last two fold into one rolling summary written by the session's
+  model; and the largest remaining message is clipped in the middle. The stored
+  conversation never changes. The state of the cuts is kept per conversation in
+  its own beaver dict, `conversation_compaction`.
+- **One retry on a context-length refusal.** When a provider refuses a prompt as
+  too long (recognised from messages recorded off OpenRouter and llama.cpp), the
+  budget compacts to 40% of the window it knows, or of the window the provider
+  names, and retries once. A second refusal ends the turn with
+  `StopReason.REFUSAL` and a `ContextOverflow` event that names the size of the
+  system prompt and tools and the room the window leaves. Any other provider
+  error propagates unchanged.
+- **Events:** `ContextCompacted`, `ContextOverheadWarning` (the system prompt and
+  tools alone are over the usable window; the call is still sent) and
+  `ContextOverflow`. The legacy ACP server forwards them as an additive
+  `sessionUpdate: "context"` notification (`event`: `compacted`, `warning`,
+  `overflow`), and the summary call's tokens as a `usage` notification.
+- **The summary call asks for no reasoning.** It sends OpenRouter's
+  `reasoning: {enabled: false}` and llama.cpp's `chat_template_kwargs:
+  {enable_thinking: false}`, and retries plainly if an endpoint rejects them:
+  Qwen 3.5 9B otherwise reasoned to its token limit and wrote no summary. An
+  empty or failed summary folds nothing, and the turn goes on.
+- **Turn numbers.** Every stored message carries the number of the `prompt()`
+  call it belongs to (`MessageEntry.turn`, JSONL key `turn`); older rows infer it,
+  and the loop's empty-answer nudge stays inside its turn.
+
+Verified live against `qwen/qwen3.5-9b` on OpenRouter: a ten-turn, tool-heavy
+conversation with windows of 16,384, 8,192 and 4,096 tokens stays inside the
+window, and with no window nothing is compacted.
+
 ## 2.13.1 — 2026-09-17
 
 ### Fixed
