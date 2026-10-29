@@ -8,7 +8,7 @@ Three ways to run it:
   stdin works too).
 - **ACP server** — `lovelaice-acp` speaks the official
   [Agent Client Protocol](https://agentclientprotocol.com) v1 over stdio, so any
-  ACP client (e.g. [aegis](https://github.com/apiad/aegis), Zed) can drive
+  ACP client (e.g. [aegis](https://github.com/syalia-srl/aegis), Zed) can drive
   lovelaice as a native, harness-free agent — local or direct-API models, no
   external CLI. Supports streaming, per-session MCP tools, token usage, and
   `load_session` resume. See `know-how/acp-v1-server.md`.
