@@ -1,0 +1,27 @@
+name: lovelaice
+accent: "#5B2A86"
+tagline:
+  es: Un agente de programación para la terminal
+  en: A coding agent for the terminal
+intro:
+  es: Lee, edita y ejecuta código en un bucle ReAct con herramientas nativas. Se usa desde la terminal, desde un editor como servidor ACP o como biblioteca de Python.
+  en: It reads, edits and runs code in a ReAct loop with native tools. Use it from the terminal, from an editor as an ACP server, or as a Python library.
+install: pipx install lovelaice
+links:
+  code: https://github.com/gia-uh/lovelaice
+  pypi: https://pypi.org/project/lovelaice/
+features:
+  - es: Una orden en la terminal y responde por la salida estándar; también lee de una tubería.
+    en: One command in the terminal and it answers on standard output; it also reads from a pipe.
+  - es: Servidor del Agent Client Protocol, para usarlo desde un editor compatible.
+    en: An Agent Client Protocol server, to drive it from a compatible editor.
+  - es: Herramientas para leer, escribir, editar, buscar y ejecutar, con llamadas nativas del modelo.
+    en: Tools to read, write, edit, search and run, through the model's native tool calls.
+example:
+  lang: bash
+  code: |
+    export OPENROUTER_API_KEY=sk-or-...
+    lovelaice "explica qué hace este repositorio"
+status:
+  es: v2.14.1 · PyPI · licencia MIT
+  en: v2.14.1 · PyPI · MIT licence
