@@ -13,10 +13,18 @@ from pydantic import BaseModel, Field
 
 
 class AgentNode(BaseModel):
+    """Run a prompt on a fresh agent.
+
+    With ``output_schema`` set, the reply's first JSON value is validated
+    against that JSON Schema; a failure re-prompts the same agent with the
+    validation error up to ``retries`` times, then raises ``OutputSchemaError``.
+    """
+
     kind: Literal["agent"] = "agent"
     prompt: str
     name: str | None = None
     output_schema: dict | None = None
+    retries: int = Field(default=2, ge=0)
 
 
 class ToolNode(BaseModel):
@@ -44,6 +52,7 @@ class PromptNode(BaseModel):
     prompt: str
     name: str | None = None
     output_schema: dict | None = None
+    retries: int = Field(default=2, ge=0)
 
 
 class ParallelNode(BaseModel):

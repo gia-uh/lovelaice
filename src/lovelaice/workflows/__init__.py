@@ -12,9 +12,17 @@ from lovelaice.workflows.models import (
     ToolNode,
     WorkflowSpec,
 )
-from lovelaice.workflows.executor import Handler, run, _final_text
+from lovelaice.workflows.executor import (
+    Handler,
+    OutputSchemaError,
+    _extract_json,
+    _final_text,
+    run,
+)
 
 __all__ = [
+    "OutputSchemaError",
+    "_extract_json",
     "AgentNode",
     "PromptNode",
     "ToolNode",

@@ -1,3 +1,19 @@
+## Unreleased
+
+### Added
+
+- **Workflow `output_schema` is enforced: extract, validate, retry.** An `agent`
+  or `prompt` node with `output_schema` used to pass `json.loads` over the whole
+  reply, so a fenced or prosey answer raised `JSONDecodeError` and a wrong shape
+  went on to the next node. The executor now extracts the first JSON value
+  (whole text, then each fenced block, then the first `{`/`[` that decodes),
+  validates it with `jsonschema`, and on failure re-prompts the same agent with
+  the validation error and the schema, up to the node's new `retries` field
+  (`2` by default, `0` for a single attempt). Exhausted retries raise
+  `OutputSchemaError`, naming the node and the last error; an invalid schema
+  fails at once. The parsed object, not its text, is what lands in the node's
+  `name`. New reference page: `docs/workflows.md`.
+
 ## 2.14.1 — 2026-10-18
 
 ### Fixed

@@ -412,6 +412,7 @@ source = { editable = "." }
 dependencies = [
     { name = "beaver-db" },
     { name = "httpx" },
+    { name = "jsonschema" },
     { name = "lingo-ai" },
     { name = "markdownify" },
     { name = "mcp" },
@@ -433,6 +434,7 @@ dev = [
 requires-dist = [
     { name = "beaver-db", editable = "../beaver" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "jsonschema", specifier = ">=4.20" },
     { name = "lingo-ai", specifier = ">=2.1.0" },
     { name = "markdownify", specifier = ">=0.13" },
     { name = "mcp", specifier = ">=1.2" },
