@@ -138,6 +138,72 @@ message is empty). Everything a branch can raise is covered, including
 produces valid JSON fails one item instead of the run. Cancellation is not an
 item failure: a cancelled run still cancels under every policy.
 
+## Progress events
+
+`run()` — and `workflow(spec).run()` — takes an optional `on_event`, called
+with one typed event each time something happens inside the run. A host that
+shows a workflow live (which node is running, how many map items are done, each
+item's result as it lands) builds that view from these; without a callback the
+engine emits nothing and the run is exactly as before.
+
+```python
+from lovelaice.workflows import ItemEnd, NodeEnd, NodeError, NodeStart
+
+async def on_event(event):
+    if isinstance(event, NodeStart):
+        print(f"→ {event.path} ({event.kind})")
+    elif isinstance(event, NodeEnd):
+        print(f"✓ {event.path} → {event.result!r}")
+    elif isinstance(event, NodeError):
+        print(f"✗ {event.path}: {event.error}")
+    elif isinstance(event, ItemEnd):
+        print(f"  item {event.index + 1}/{event.total} → {event.result!r}")
+
+result = await workflow(spec).run(agent_factory=make_agent, on_event=on_event)
+```
+
+| Event | When | Fields |
+| --- | --- | --- |
+| `NodeStart` | A node is about to run. | `path`, `kind`, `name` |
+| `NodeEnd` | A node finished. | `path`, `kind`, `name`, `result` |
+| `NodeError` | A node raised. | `path`, `kind`, `name`, `error` |
+| `ItemEnd` | One item of a `map`/`parallel` finished. | `path`, `index`, `total`, `result` |
+
+Every event also carries a `type` (`"node_start"`, `"node_end"`,
+`"node_error"`, `"item_end"`), so a host can branch on the serialized form
+(`event.model_dump()`) instead of importing the classes — handy when the events
+go out over SSE or a log.
+
+`path` identifies the node in the tree, rooted at `"root"`:
+
+| Part of the tree | Path |
+| --- | --- |
+| The root node | `root` |
+| The *i*-th child of a `sequence` or `parallel` (0-based) | `{parent}.{i}` |
+| The *j*-th item of a `map` (0-based) | `{parent}[{j}]` |
+
+So `root.1[3].0` is the first child of the sequence that runs for item 3 of the
+map at `root.1`. A map's item nodes are ordinary nodes, so they emit their own
+`NodeStart`/`NodeEnd`/`NodeError` at these paths.
+
+`ItemEnd` arrives as each item *finishes*, which is **completion order, not list
+order**: in a fan-out with `MAX_CONCURRENCY` slots, a fast item that was third in
+the list can report first. This is what makes a live progress bar possible —
+`index` is still the item's position in the input list and in the collected
+result, and `total` is the number of items the fan-out started with, so a host
+can render `done/total` without knowing the list in advance.
+
+A failed item emits **no** `ItemEnd`: its own node already emitted `NodeError`
+with the item's path, and the fan-out's `on_error` policy (see
+[Partial results](#partial-results-on_error)) decides what happens to the run.
+The fan-out itself then ends normally, and its `NodeEnd.result` carries the
+final list — successes only under `skip`, `{"error": …}` entries under `keep`.
+
+Events are observation, not a hook: the callback is awaited before the run goes
+on (so a slow host slows the run, and no event can arrive after `run()`
+returned), a plain non-async callable is accepted too, and nothing the callback
+does changes a result. Cancellation emits nothing for the node it cut.
+
 ## Host seams
 
 - `agent_factory()` — build a fresh agent (the same seam ACP servers use). The
@@ -146,5 +212,8 @@ item failure: a cancelled run still cancels under every policy.
   ships none so it stays independent of any concrete tool set.
 - `prompt_handler(prompt, vars) -> str` — run a prompt on the host's live agent.
   Required only when the spec contains a `prompt` node.
+- `on_event(event)` — optional, `async (event) -> None`; receives
+  `NodeStart`/`NodeEnd`/`NodeError` per node and `ItemEnd` per finished fan-out
+  item, as the run goes. See [Progress events](#progress-events).
 
 `run()` also takes `inputs` to seed the variables visible to the first nodes.

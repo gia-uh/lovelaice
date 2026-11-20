@@ -9,12 +9,20 @@ agents are built and what tools/MCP they carry.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import re
 from typing import Any, Awaitable, Callable
 
 import jsonschema
 
+from lovelaice.workflows.events import (
+    ItemEnd,
+    NodeEnd,
+    NodeError,
+    NodeStart,
+    WorkflowEvent,
+)
 from lovelaice.workflows.models import (
     AgentNode,
     MapNode,
@@ -216,6 +224,26 @@ def _sem(ctx: dict):
     return ctx.get("sem") or _NULL_ASEM
 
 
+def _node_name(node: Node) -> str | None:
+    """A node's ``name`` (``sequence`` is the one kind that has none)."""
+    return getattr(node, "name", None)
+
+
+async def _emit(ctx: dict, event: WorkflowEvent) -> None:
+    """Hand ``event`` to the run's ``on_event`` callback, if it has one.
+
+    Awaited inline, before the node goes on, so a host sees events in order and
+    is never called after ``run()`` returned. A plain (sync) callable is
+    accepted too, for hosts that only collect events.
+    """
+    callback = ctx.get("on_event")
+    if callback is None:
+        return
+    outcome = callback(event)
+    if inspect.isawaitable(outcome):
+        await outcome
+
+
 async def _run_agent(node: AgentNode, ctx: dict, agent_factory: Callable[[], Any]) -> dict:
     """Run ``node`` on a fresh agent.
 
@@ -308,7 +336,7 @@ def _child_ctx(ctx: dict, extra_vars: dict | None = None) -> dict:
 
 
 async def _fan_out(
-    coros: list[Awaitable[dict]], on_error: str
+    coros: list[Awaitable[dict]], on_error: str, ctx: dict, path: str
 ) -> list[dict]:
     """Await every fan-out branch, applying the node's ``on_error`` policy.
 
@@ -317,14 +345,26 @@ async def _fan_out(
     ``return_exceptions`` so a failed branch never discards its siblings'
     results; ``skip`` drops it, ``keep`` replaces it with ``{"error": ...}``.
 
+    Each branch is wrapped so a successful item emits ``ItemEnd`` the moment it
+    finishes — completion order, which is not the list order the results keep.
+    A failed item emits no ``ItemEnd`` (its own node already emitted
+    ``NodeError``).
+
     Cancellation and other ``BaseException``s are re-raised even under ``skip``
     and ``keep``: a cancelled run must stay cancelled, not become a result.
     """
+    total = len(coros)
 
+    async def track(index: int, coro: Awaitable[dict]) -> dict:
+        result = await coro
+        await _emit(ctx, ItemEnd(path=path, index=index, total=total, result=result))
+        return result
+
+    tracked = [track(i, c) for i, c in enumerate(coros)]
     if on_error == "raise":
-        return list(await asyncio.gather(*coros))
+        return list(await asyncio.gather(*tracked))
     results: list[dict] = []
-    for outcome in await asyncio.gather(*coros, return_exceptions=True):
+    for outcome in await asyncio.gather(*tracked, return_exceptions=True):
         if isinstance(outcome, Exception):
             if on_error == "keep":
                 results.append({"error": str(outcome) or type(outcome).__name__})
@@ -335,17 +375,23 @@ async def _fan_out(
     return results
 
 
-async def _run_parallel(node: ParallelNode, ctx: dict, agent_factory: Callable[[], Any]) -> dict:
-    async def run_child(child):
-        return await _run_node(child, _child_ctx(ctx), agent_factory)
+async def _run_parallel(
+    node: ParallelNode, ctx: dict, agent_factory: Callable[[], Any], path: str
+) -> dict:
+    async def run_child(index, child):
+        return await _run_node(child, _child_ctx(ctx), agent_factory, f"{path}.{index}")
 
-    results = await _fan_out([run_child(c) for c in node.children], node.on_error)
+    results = await _fan_out(
+        [run_child(i, c) for i, c in enumerate(node.children)], node.on_error, ctx, path
+    )
     if node.name is not None:
         ctx["vars"][node.name] = results
     return {"items": results}
 
 
-async def _run_map(node: MapNode, ctx: dict, agent_factory: Callable[[], Any]) -> dict:
+async def _run_map(
+    node: MapNode, ctx: dict, agent_factory: Callable[[], Any], path: str
+) -> dict:
     items = ctx["vars"].get(node.over)
     if not isinstance(items, list):
         raise RuntimeError(
@@ -353,16 +399,53 @@ async def _run_map(node: MapNode, ctx: dict, agent_factory: Callable[[], Any]) -
             f"{type(items).__name__}"
         )
 
-    async def run_item(el):
-        return await _run_node(node.node, _child_ctx(ctx, {node.as_: el}), agent_factory)
+    async def run_item(index, el):
+        return await _run_node(
+            node.node,
+            _child_ctx(ctx, {node.as_: el}),
+            agent_factory,
+            f"{path}[{index}]",
+        )
 
-    results = await _fan_out([run_item(x) for x in items], node.on_error)
+    results = await _fan_out(
+        [run_item(i, x) for i, x in enumerate(items)], node.on_error, ctx, path
+    )
     if node.name is not None:
         ctx["vars"][node.name] = results
     return {"items": results}
 
 
-async def _run_node(node: Node, ctx: dict, agent_factory: Callable[[], Any]) -> dict:
+async def _run_node(
+    node: Node, ctx: dict, agent_factory: Callable[[], Any], path: str = "root"
+) -> dict:
+    """Run ``node`` at ``path``, emitting start/end/error events around it.
+
+    Events are best-effort observation: the node's result and exceptions are
+    untouched, and a cancelled run emits nothing for the node it was cut in.
+    """
+    kind = node.kind
+    name = _node_name(node)
+    await _emit(ctx, NodeStart(path=path, kind=kind, name=name))
+    try:
+        result = await _dispatch(node, ctx, agent_factory, path)
+    except Exception as exc:
+        await _emit(
+            ctx,
+            NodeError(
+                path=path,
+                kind=kind,
+                name=name,
+                error=str(exc) or type(exc).__name__,
+            ),
+        )
+        raise
+    await _emit(ctx, NodeEnd(path=path, kind=kind, name=name, result=result))
+    return result
+
+
+async def _dispatch(
+    node: Node, ctx: dict, agent_factory: Callable[[], Any], path: str
+) -> dict:
     if isinstance(node, AgentNode):
         return await _run_agent(node, ctx, agent_factory)
     if isinstance(node, PromptNode):
@@ -370,13 +453,13 @@ async def _run_node(node: Node, ctx: dict, agent_factory: Callable[[], Any]) -> 
     if isinstance(node, ToolNode):
         return await _run_tool(node, ctx)
     if isinstance(node, ParallelNode):
-        return await _run_parallel(node, ctx, agent_factory)
+        return await _run_parallel(node, ctx, agent_factory, path)
     if isinstance(node, MapNode):
-        return await _run_map(node, ctx, agent_factory)
+        return await _run_map(node, ctx, agent_factory, path)
     if isinstance(node, SequenceNode):
         result: dict = {}
-        for child in node.children:
-            result = await _run_node(child, ctx, agent_factory)
+        for i, child in enumerate(node.children):
+            result = await _run_node(child, ctx, agent_factory, f"{path}.{i}")
         return result
     raise TypeError(f"unknown node: {node!r}")
 
@@ -388,6 +471,7 @@ async def run(
     handlers: dict[str, Handler] | None = None,
     inputs: dict | None = None,
     prompt_handler: "Callable[[str, dict], Awaitable[str]] | None" = None,
+    on_event: "Callable[[WorkflowEvent], Any] | None" = None,
 ) -> dict:
     """Execute a workflow spec and return the root node's result dict.
 
@@ -398,6 +482,12 @@ async def run(
     ``prompt_handler`` is ``async (prompt, vars) -> str`` — the host runs the
     prompt on its live/primary agent (shared context). Required only if the spec
     contains a ``prompt`` node.
+
+    ``on_event`` — ``async (event) -> None`` (a plain callable works too) — is
+    called with each progress event as the run goes: ``NodeStart``,
+    ``NodeEnd``, ``NodeError`` for every node, and ``ItemEnd`` per finished
+    fan-out item. Omitted, nothing is emitted and the run is unchanged. See
+    ``lovelaice.workflows.events``.
     """
     ctx = {
         "vars": dict(inputs or {}),
@@ -405,5 +495,6 @@ async def run(
         "prompt_handler": prompt_handler,
         "sem": asyncio.Semaphore(MAX_CONCURRENCY),
         "in_fanout": False,
+        "on_event": on_event,
     }
     return await _run_node(spec.root, ctx, agent_factory)
