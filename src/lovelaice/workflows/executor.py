@@ -307,11 +307,39 @@ def _child_ctx(ctx: dict, extra_vars: dict | None = None) -> dict:
     return {**ctx, "vars": {**ctx["vars"], **(extra_vars or {})}, "in_fanout": True}
 
 
+async def _fan_out(
+    coros: list[Awaitable[dict]], on_error: str
+) -> list[dict]:
+    """Await every fan-out branch, applying the node's ``on_error`` policy.
+
+    ``raise`` keeps the old behaviour exactly: a plain ``gather``, so the first
+    failure propagates and the run stops. ``skip`` and ``keep`` gather with
+    ``return_exceptions`` so a failed branch never discards its siblings'
+    results; ``skip`` drops it, ``keep`` replaces it with ``{"error": ...}``.
+
+    Cancellation and other ``BaseException``s are re-raised even under ``skip``
+    and ``keep``: a cancelled run must stay cancelled, not become a result.
+    """
+
+    if on_error == "raise":
+        return list(await asyncio.gather(*coros))
+    results: list[dict] = []
+    for outcome in await asyncio.gather(*coros, return_exceptions=True):
+        if isinstance(outcome, Exception):
+            if on_error == "keep":
+                results.append({"error": str(outcome) or type(outcome).__name__})
+            continue
+        if isinstance(outcome, BaseException):
+            raise outcome
+        results.append(outcome)
+    return results
+
+
 async def _run_parallel(node: ParallelNode, ctx: dict, agent_factory: Callable[[], Any]) -> dict:
     async def run_child(child):
         return await _run_node(child, _child_ctx(ctx), agent_factory)
 
-    results = list(await asyncio.gather(*[run_child(c) for c in node.children]))
+    results = await _fan_out([run_child(c) for c in node.children], node.on_error)
     if node.name is not None:
         ctx["vars"][node.name] = results
     return {"items": results}
@@ -328,7 +356,7 @@ async def _run_map(node: MapNode, ctx: dict, agent_factory: Callable[[], Any]) -
     async def run_item(el):
         return await _run_node(node.node, _child_ctx(ctx, {node.as_: el}), agent_factory)
 
-    results = list(await asyncio.gather(*[run_item(x) for x in items]))
+    results = await _fan_out([run_item(x) for x in items], node.on_error)
     if node.name is not None:
         ctx["vars"][node.name] = results
     return {"items": results}
