@@ -55,24 +55,41 @@ class PromptNode(BaseModel):
     retries: int = Field(default=2, ge=0)
 
 
+OnError = Literal["raise", "skip", "keep"]
+"""What a fan-out does when one item fails.
+
+``raise`` (default) fails the whole run as before; ``skip`` leaves the failed
+items out of the result list; ``keep`` puts ``{"error": "<message>"}`` in their
+place, so the rest of the results survive and a consumer can count them.
+"""
+
+
 class ParallelNode(BaseModel):
     """Run children concurrently (each in an isolated vars scope); collect the
-    list of their results into ``name``. Children must NOT be ``prompt`` nodes."""
+    list of their results into ``name``. Children must NOT be ``prompt`` nodes.
+
+    ``on_error`` decides what happens when one child fails (see ``OnError``).
+    """
 
     kind: Literal["parallel"] = "parallel"
     children: list["Node"] = Field(min_length=1)
     name: str | None = None
+    on_error: OnError = "raise"
 
 
 class MapNode(BaseModel):
     """Fan ``node`` over the list at ``vars[over]``, binding each element to
-    ``vars[as]`` in an isolated scope; collect results into ``name``."""
+    ``vars[as]`` in an isolated scope; collect results into ``name``.
+
+    ``on_error`` decides what happens when one item fails (see ``OnError``).
+    """
 
     kind: Literal["map"] = "map"
     over: str
     as_: str = Field(alias="as")
     node: "Node"
     name: str | None = None
+    on_error: OnError = "raise"
 
     model_config = {"populate_by_name": True}
 

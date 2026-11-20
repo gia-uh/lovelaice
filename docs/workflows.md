@@ -37,7 +37,9 @@ later prompts can interpolate with `{name}` — a value that is exactly
 | `parallel` | Runs children concurrently in isolated variable scopes; collects their results as a list. |
 | `map` | Fans `node` over the list in `vars[over]`, binding each element to `{as}` in an isolated scope; collects the results. |
 
-Leaf work is limited by a `MAX_CONCURRENCY` semaphore per run.
+Leaf work is limited by a `MAX_CONCURRENCY` semaphore per run. A fan-out
+(`parallel` or `map`) decides what one failing item does to the rest with
+`on_error`; see [Partial results](#partial-results-on_error).
 
 ## Structured output: `output_schema`
 
@@ -101,6 +103,40 @@ spending the retries.
 `prompt` nodes enforce the schema the same way, re-prompting the shared live
 agent through `prompt_handler`; that agent's conversation therefore shows the
 task, the bad answer and the repair request.
+
+## Partial results: `on_error`
+
+A fan-out over dozens of items (one model call each) should not lose everything
+because one item misbehaves. `map` and `parallel` nodes take `on_error`:
+
+| Value | On one failed item |
+| --- | --- |
+| `raise` (default) | The run fails, as it always has. |
+| `skip` | The failed item is left out of the result list. |
+| `keep` | `{"error": "<message>"}` takes its place, in order. |
+
+```json
+{
+  "kind": "map",
+  "over": "chunks",
+  "as": "chunk",
+  "name": "fichas",
+  "on_error": "keep",
+  "node": { "kind": "agent", "prompt": "Fiche this chunk: {chunk}", "output_schema": { "type": "object" } }
+}
+```
+
+`keep` is the policy to report on: `{"text": …}` entries are successes and
+`{"error": …}` entries are failures, so a later `tool` node can count them and
+say which items need a retry. `skip` is for when only the successful results
+matter and a shorter list is fine. `raise` is unchanged — a plain `gather`, so
+the first failure propagates exactly as before.
+
+The exception's message is what lands in `error` (its class name when the
+message is empty). Everything a branch can raise is covered, including
+`OutputSchemaError` from a child with `output_schema`, so a model that never
+produces valid JSON fails one item instead of the run. Cancellation is not an
+item failure: a cancelled run still cancels under every policy.
 
 ## Host seams
 

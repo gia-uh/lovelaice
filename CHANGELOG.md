@@ -2,6 +2,16 @@
 
 ### Added
 
+- **Workflows: `on_error` keeps partial results when a fan-out item fails.**
+  `map` and `parallel` used a bare `asyncio.gather`, so one failing item — a
+  model call that errored, an `output_schema` that never validated — failed the
+  whole run and every result already computed was lost. Both nodes now take
+  `on_error: "raise" | "skip" | "keep"` (`raise` by default, unchanged). `skip`
+  leaves failed items out of the result list; `keep` puts
+  `{"error": "<message>"}` in their place, so a consumer can count the failures
+  and report them. Cancellation is re-raised under every policy. See
+  `docs/workflows.md`, "Partial results: `on_error`".
+
 - **Workflow `output_schema` is enforced: extract, validate, retry.** An `agent`
   or `prompt` node with `output_schema` used to pass `json.loads` over the whole
   reply, so a fenced or prosey answer raised `JSONDecodeError` and a wrong shape
