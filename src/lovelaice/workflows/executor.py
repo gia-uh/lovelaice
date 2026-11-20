@@ -13,6 +13,8 @@ import json
 import re
 from typing import Any, Awaitable, Callable
 
+import jsonschema
+
 from lovelaice.workflows.models import (
     AgentNode,
     MapNode,
@@ -68,6 +70,134 @@ def _final_text(agent: Any) -> str:
     return ""
 
 
+class OutputSchemaError(RuntimeError):
+    """A node's output still did not match its ``output_schema`` after retries.
+
+    Names the node and carries the last validation error, so a failing workflow
+    points at the step and the field instead of a bare ``JSONDecodeError``.
+    """
+
+
+_FENCE = re.compile(r"```[ \t]*(?:[A-Za-z0-9_+.-]+)?[ \t]*\n?(.*?)```", re.DOTALL)
+
+
+def _extract_json(text: str) -> Any:
+    """Return the first JSON value in ``text``.
+
+    Small models wrap their answer in a code fence or in a sentence, so the
+    whole text is tried first, then each fenced block, then the first ``{`` or
+    ``[`` from which a complete value decodes. Raises ``ValueError`` when the
+    text holds no JSON value at all.
+    """
+    stripped = text.strip()
+    if stripped:
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+        for block in _FENCE.findall(stripped):
+            block = block.strip()
+            if not block:
+                continue
+            try:
+                return json.loads(block)
+            except json.JSONDecodeError:
+                continue
+        decoder = json.JSONDecoder()
+        for i, ch in enumerate(stripped):
+            if ch in "{[":
+                try:
+                    value, _end = decoder.raw_decode(stripped, i)
+                except json.JSONDecodeError:
+                    continue
+                return value
+    raise ValueError("the reply contained no JSON value")
+
+
+def _node_label(name: str | None) -> str:
+    return f"node {name!r}" if name else "an unnamed workflow node"
+
+
+def _schema_checker(
+    node_name: str | None, schema: dict
+) -> Callable[[str], tuple[Any, str | None]]:
+    """Compile ``schema`` into ``text -> (value, error)``.
+
+    An invalid schema is the workflow author's mistake, not the model's, so it
+    fails at once instead of burning the retries.
+    """
+    validator_cls = jsonschema.validators.validator_for(schema)
+    try:
+        validator_cls.check_schema(schema)
+    except jsonschema.exceptions.SchemaError as exc:
+        raise OutputSchemaError(
+            f"{_node_label(node_name)}: invalid output_schema: {exc.message}"
+        ) from exc
+    validator = validator_cls(schema)
+
+    def check(text: str) -> tuple[Any, str | None]:
+        try:
+            value = _extract_json(text)
+        except ValueError as exc:
+            return None, str(exc)
+        errors = sorted(
+            validator.iter_errors(value),
+            key=lambda e: [str(p) for p in e.absolute_path],
+        )
+        if not errors:
+            return value, None
+        first = errors[0]
+        where = "/".join(str(p) for p in first.absolute_path)
+        return None, f"{where}: {first.message}" if where else first.message
+
+    return check
+
+
+def _repair_prompt(error: str, schema: dict) -> str:
+    """Re-prompt text for the same agent: the error, plus the schema again."""
+    return (
+        "Your previous reply could not be used as this step's structured output.\n"
+        f"Problem: {error}\n\n"
+        "Reply again with ONLY one JSON value that matches this JSON Schema — "
+        "no prose, no explanation, no code fence:\n\n"
+        f"{json.dumps(schema, ensure_ascii=False, indent=2)}"
+    )
+
+
+async def _enforce_schema(
+    node: "AgentNode | PromptNode",
+    check: Callable[[str], tuple[Any, str | None]],
+    text: str,
+    reask: Callable[[str], Awaitable[str]],
+) -> Any:
+    """Validate ``text``; on failure ``reask`` with the error, up to the retries.
+
+    ``check`` comes from ``_schema_checker`` and is built before the first model
+    call, so a malformed schema costs nothing. ``reask`` performs one more model
+    call with the repair prompt and returns the new reply, so the caller decides
+    which agent is asked (the node's own fresh agent, or the host's live one).
+    """
+    schema = node.output_schema
+    assert schema is not None  # callers only ask when a schema is set
+    value, error = check(text)
+    for _ in range(node.retries):
+        if error is None:
+            break
+        text = await reask(_repair_prompt(error, schema))
+        value, error = check(text)
+    if error is not None:
+        raise _output_schema_error(node.name, node.retries, error)
+    return value
+
+
+def _output_schema_error(node_name: str | None, retries: int, error: str) -> OutputSchemaError:
+    attempts = retries + 1
+    return OutputSchemaError(
+        f"{_node_label(node_name)}: output_schema not satisfied after "
+        f"{attempts} attempt{'s' if attempts != 1 else ''}; last error: {error}"
+    )
+
+
 class _NullAsem:
     """Async no-op context — used when no concurrency semaphore is in ctx."""
 
@@ -87,13 +217,30 @@ def _sem(ctx: dict):
 
 
 async def _run_agent(node: AgentNode, ctx: dict, agent_factory: Callable[[], Any]) -> dict:
+    """Run ``node`` on a fresh agent.
+
+    With ``output_schema``, the reply is parsed and validated; a bad reply gets
+    ``node.retries`` more chances, each one a re-prompt of the SAME agent with
+    the validation error, so its context (the task and its own wrong answer)
+    is kept. Exhausted retries raise ``OutputSchemaError``.
+    """
     prompt = _render_template(node.prompt, ctx["vars"])
+    check = (
+        _schema_checker(node.name, node.output_schema)
+        if node.output_schema is not None
+        else None
+    )
     agent = agent_factory()
     async with _sem(ctx):
         await agent.prompt(prompt)
     text = _final_text(agent)
-    if node.output_schema is not None:
-        value = json.loads(text)
+    if check is not None:
+        async def reask(repair: str) -> str:
+            async with _sem(ctx):
+                await agent.prompt(repair)
+            return _final_text(agent)
+
+        value = await _enforce_schema(node, check, text, reask)
         if node.name is not None:
             ctx["vars"][node.name] = value  # raw object, for later {name} passthrough
         return value
@@ -133,8 +280,22 @@ async def _run_prompt(node: PromptNode, ctx: dict) -> dict:
             "(no live/primary agent available — is this a headless run?)"
         )
     prompt = _render_template(node.prompt, ctx["vars"])
+    check = (
+        _schema_checker(node.name, node.output_schema)
+        if node.output_schema is not None
+        else None
+    )
     async with _sem(ctx):
         text = await handler(prompt, ctx["vars"])
+    if check is not None:
+        async def reask(repair: str) -> str:
+            async with _sem(ctx):
+                return await handler(repair, ctx["vars"])
+
+        value = await _enforce_schema(node, check, text, reask)
+        if node.name is not None:
+            ctx["vars"][node.name] = value
+        return value
     if node.name is not None:
         ctx["vars"][node.name] = text
     return {"text": text}

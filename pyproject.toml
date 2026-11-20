@@ -16,6 +16,7 @@ dependencies = [
     "mcp>=1.2",
     "agent-client-protocol>=0.10,<1",
     "httpx>=0.28",
+    "jsonschema>=4.20",
     "markdownify>=0.13",
     "readabilipy>=0.3",
     "pathspec>=0.12",
