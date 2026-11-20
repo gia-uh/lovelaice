@@ -2,6 +2,21 @@
 
 ### Added
 
+- **Workflows: progress events from `run()`.** `run()` (and
+  `workflow(spec).run()`) took no callback, so a host that shows a run live saw
+  nothing until the root node returned. Both now take an optional `on_event`,
+  `async (event) -> None` (a plain callable works too), called as the run goes
+  with `NodeStart(path, kind, name)`, `NodeEnd(path, kind, name, result)` and
+  `NodeError(path, kind, name, error)` for every node, plus
+  `ItemEnd(path, index, total, result)` for each `map`/`parallel` item as it
+  finishes — in completion order, which is not the list order the results keep.
+  `path` is rooted at `root`: a sequence/parallel child is `{parent}.{i}`, a map
+  item is `{parent}[{j}]`. Each event also carries a `type` for serialization.
+  A failed item emits no `ItemEnd` (its node emitted `NodeError`) and `on_error`
+  still decides the run's fate. Without a callback nothing changes. Events are
+  in `lovelaice/workflows/events.py`; see `docs/workflows.md`, "Progress
+  events".
+
 - **Workflows: `on_error` keeps partial results when a fan-out item fails.**
   `map` and `parallel` used a bare `asyncio.gather`, so one failing item — a
   model call that errored, an `output_schema` that never validated — failed the

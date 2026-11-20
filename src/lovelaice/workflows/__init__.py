@@ -20,6 +20,13 @@ from lovelaice.workflows.executor import (
     _final_text,
     run,
 )
+from lovelaice.workflows.events import (
+    ItemEnd,
+    NodeEnd,
+    NodeError,
+    NodeStart,
+    WorkflowEvent,
+)
 
 __all__ = [
     "OutputSchemaError",
@@ -37,6 +44,11 @@ __all__ = [
     "run",
     "_final_text",
     "workflow",
+    "NodeStart",
+    "NodeEnd",
+    "NodeError",
+    "ItemEnd",
+    "WorkflowEvent",
 ]
 
 
@@ -51,6 +63,7 @@ class _Workflow:
         handlers: "dict[str, Handler] | None" = None,
         inputs: dict | None = None,
         prompt_handler: "Callable[[str, dict], Any] | None" = None,
+        on_event: "Callable[[WorkflowEvent], Any] | None" = None,
     ) -> dict:
         return await run(
             self._spec,
@@ -58,6 +71,7 @@ class _Workflow:
             handlers=handlers,
             inputs=inputs,
             prompt_handler=prompt_handler,
+            on_event=on_event,
         )
 
 
