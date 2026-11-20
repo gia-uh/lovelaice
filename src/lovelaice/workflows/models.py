@@ -18,11 +18,17 @@ class AgentNode(BaseModel):
     With ``output_schema`` set, the reply's first JSON value is validated
     against that JSON Schema; a failure re-prompts the same agent with the
     validation error up to ``retries`` times, then raises ``OutputSchemaError``.
+
+    ``agent`` names a factory from ``run(agents={...})``; unset, the run's
+    default ``agent_factory`` builds it. A node that is one typed call (classify,
+    extract, compare) can point at a tool-less factory, so small models are not
+    dragged through a ReAct loop.
     """
 
     kind: Literal["agent"] = "agent"
     prompt: str
     name: str | None = None
+    agent: str | None = None
     output_schema: dict | None = None
     retries: int = Field(default=2, ge=0)
 

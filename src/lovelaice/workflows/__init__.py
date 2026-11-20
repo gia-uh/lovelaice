@@ -16,6 +16,7 @@ from lovelaice.workflows.models import (
 from lovelaice.workflows.executor import (
     Handler,
     OutputSchemaError,
+    UnknownAgentError,
     _extract_json,
     _final_text,
     run,
@@ -30,6 +31,7 @@ from lovelaice.workflows.events import (
 
 __all__ = [
     "OutputSchemaError",
+    "UnknownAgentError",
     "_extract_json",
     "AgentNode",
     "PromptNode",
@@ -60,6 +62,7 @@ class _Workflow:
         self,
         *,
         agent_factory: Callable[[], Any],
+        agents: "dict[str, Callable[[], Any]] | None" = None,
         handlers: "dict[str, Handler] | None" = None,
         inputs: dict | None = None,
         prompt_handler: "Callable[[str, dict], Any] | None" = None,
@@ -68,6 +71,7 @@ class _Workflow:
         return await run(
             self._spec,
             agent_factory=agent_factory,
+            agents=agents,
             handlers=handlers,
             inputs=inputs,
             prompt_handler=prompt_handler,

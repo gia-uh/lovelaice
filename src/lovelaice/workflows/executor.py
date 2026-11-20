@@ -86,6 +86,14 @@ class OutputSchemaError(RuntimeError):
     """
 
 
+class UnknownAgentError(RuntimeError):
+    """An ``agent`` node names a factory ``run()`` was not given.
+
+    Names the node and the unknown agent, and lists the names that ARE
+    registered, so a typo in a spec reads as one instead of a bare ``KeyError``.
+    """
+
+
 _FENCE = re.compile(r"```[ \t]*(?:[A-Za-z0-9_+.-]+)?[ \t]*\n?(.*?)```", re.DOTALL)
 
 
@@ -244,8 +252,33 @@ async def _emit(ctx: dict, event: WorkflowEvent) -> None:
         await outcome
 
 
+def _resolve_agent_factory(
+    node: AgentNode, ctx: dict, default: Callable[[], Any]
+) -> Callable[[], Any]:
+    """The factory ``node`` asks for: its named one, or the run's default.
+
+    A named agent comes from ``run(agents={...})``; an unknown name is an
+    authoring mistake, so it raises ``UnknownAgentError`` naming the node, the
+    name and the ones actually registered.
+    """
+    if node.agent is None:
+        return default
+    agents = ctx.get("agents") or {}
+    factory = agents.get(node.agent)
+    if factory is None:
+        if agents:
+            known = ", ".join(sorted(repr(k) for k in agents))
+            detail = f"registered: {known}"
+        else:
+            detail = "no named agents are registered (pass agents={...} to run())"
+        raise UnknownAgentError(
+            f"{_node_label(node.name)}: unknown agent {node.agent!r}; {detail}"
+        )
+    return factory
+
+
 async def _run_agent(node: AgentNode, ctx: dict, agent_factory: Callable[[], Any]) -> dict:
-    """Run ``node`` on a fresh agent.
+    """Run ``node`` on a fresh agent from the factory it selects.
 
     With ``output_schema``, the reply is parsed and validated; a bad reply gets
     ``node.retries`` more chances, each one a re-prompt of the SAME agent with
@@ -258,7 +291,7 @@ async def _run_agent(node: AgentNode, ctx: dict, agent_factory: Callable[[], Any
         if node.output_schema is not None
         else None
     )
-    agent = agent_factory()
+    agent = _resolve_agent_factory(node, ctx, agent_factory)()
     async with _sem(ctx):
         await agent.prompt(prompt)
     text = _final_text(agent)
@@ -468,12 +501,19 @@ async def run(
     spec: WorkflowSpec,
     *,
     agent_factory: Callable[[], Any],
+    agents: dict[str, Callable[[], Any]] | None = None,
     handlers: dict[str, Handler] | None = None,
     inputs: dict | None = None,
     prompt_handler: "Callable[[str, dict], Awaitable[str]] | None" = None,
     on_event: "Callable[[WorkflowEvent], Any] | None" = None,
 ) -> dict:
     """Execute a workflow spec and return the root node's result dict.
+
+    ``agent_factory`` builds the fresh agent for an ``agent`` node that names no
+    ``agent``. ``agents`` maps a name to another factory, so one node can be a
+    tool-less typed call while the rest keep the full tool-using agent:
+    ``{"kind": "agent", "agent": "plain", ...}``. An unknown name raises
+    ``UnknownAgentError`` naming the node and the registered names.
 
     ``handlers`` maps a ``tool`` name to ``async (args, vars) -> Any`` — the host
     provides these (e.g. bridged from an agent's MCP tools). The engine itself
@@ -492,6 +532,7 @@ async def run(
     ctx = {
         "vars": dict(inputs or {}),
         "handlers": handlers or {},
+        "agents": agents or {},
         "prompt_handler": prompt_handler,
         "sem": asyncio.Semaphore(MAX_CONCURRENCY),
         "in_fanout": False,
