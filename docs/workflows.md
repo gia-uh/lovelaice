@@ -30,7 +30,7 @@ later prompts can interpolate with `{name}` — a value that is exactly
 
 | `kind` | What it does |
 | --- | --- |
-| `agent` | Prompts a **fresh** agent built by `agent_factory`; returns `{"text": …}`, or the validated object when `output_schema` is set. |
+| `agent` | Prompts a **fresh** agent built by `agent_factory` — or by the named factory in its `agent` field; returns `{"text": …}`, or the validated object when `output_schema` is set. |
 | `prompt` | Prompts the **host's live/primary** agent through `prompt_handler` (shared conversation). Not allowed inside a `parallel`/`map` fan-out. |
 | `tool` | Calls a host `handler(args, vars)` deterministically — no model involved. |
 | `sequence` | Runs children in order; the result is the last child's. |
@@ -40,6 +40,52 @@ later prompts can interpolate with `{name}` — a value that is exactly
 Leaf work is limited by a `MAX_CONCURRENCY` semaphore per run. A fan-out
 (`parallel` or `map`) decides what one failing item does to the rest with
 `on_error`; see [Partial results](#partial-results-on_error).
+
+## Choosing the agent per node
+
+By default every `agent` node is built by the one `agent_factory` the host
+passes to `run()`, so it carries that agent's whole tool set. Many steps are a
+single typed call — classify, extract, compare two texts — that needs no tools
+at all; giving them tools costs a ReAct loop per item and lets a small local
+model wander off the task.
+
+A node can name its own factory, and the host registers named factories next to
+the default:
+
+```python
+def make_full():        # default: tools + a ReAct loop
+    ...
+
+def make_plain():       # no tools: one model call per step
+    ...
+
+result = await workflow(spec).run(
+    agent_factory=make_full,
+    agents={"plain": make_plain},
+)
+```
+
+```json
+{
+  "kind": "agent",
+  "agent": "plain",
+  "prompt": "Classify {item}",
+  "output_schema": { "type": "object" }
+}
+```
+
+| `agent` on the node | Factory used |
+| --- | --- |
+| unset (or `null`) | `agent_factory` — the run's default, unchanged. |
+| a name in `agents=` | That factory, for this node only. |
+| a name nobody registered | `UnknownAgentError`, naming the node, the name and the ones registered. |
+
+The selection is carried through `sequence`, `parallel` and `map`, so a fan-out
+of typed calls can point at the plain factory while the surrounding nodes keep
+the tool-using agent. Each node still gets a **fresh** agent from its factory;
+nothing is shared between nodes. An unknown name is checked when the node runs,
+before any model call for it, so a typo fails on the step that has it rather
+than halfway through a long fan-out.
 
 ## Structured output: `output_schema`
 
@@ -208,6 +254,9 @@ does changes a result. Cancellation emits nothing for the node it cut.
 
 - `agent_factory()` — build a fresh agent (the same seam ACP servers use). The
   executor only calls `prompt(text)` and `messages_for_llm()`.
+- `agents[name]()` — optional extra factories, each building a fresh agent, for
+  `agent` nodes that name one; see [Choosing the agent per
+  node](#choosing-the-agent-per-node).
 - `handlers[tool]` — `async (args, vars) -> Any` for `tool` nodes; the engine
   ships none so it stays independent of any concrete tool set.
 - `prompt_handler(prompt, vars) -> str` — run a prompt on the host's live agent.

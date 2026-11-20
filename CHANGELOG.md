@@ -2,6 +2,19 @@
 
 ### Added
 
+- **Workflows: choose the agent factory per node.** Every `agent` node used the
+  run's single `agent_factory`, so a step that is one typed call (classify,
+  extract, compare two texts) still got the full tool-using agent — a ReAct loop
+  per item, and small models wandering. `AgentNode` now takes an optional
+  `agent: str | None`, and `run()` (and `workflow(spec).run()`) takes
+  `agents: dict[str, Callable[[], Any]]` beside the existing `agent_factory`,
+  which stays the default for every node that names none. A host can register
+  e.g. `"plain"` (no tools, one call) next to the default. The selection
+  reaches nodes inside `sequence`, `parallel` and `map`; an unknown name raises
+  `lovelaice.workflows.UnknownAgentError` naming the node, the name and the
+  registered ones. Existing specs and callers are unchanged. See
+  `docs/workflows.md`, "Choosing the agent per node".
+
 - **Workflows: progress events from `run()`.** `run()` (and
   `workflow(spec).run()`) took no callback, so a host that shows a run live saw
   nothing until the root node returned. Both now take an optional `on_event`,
