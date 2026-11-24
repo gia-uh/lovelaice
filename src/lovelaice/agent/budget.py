@@ -91,6 +91,7 @@ class ContextBudget:
         state: CompactionState,
         summarize: Summarizer | None,
         target_tokens: int | None = None,
+        on_compacting: Callable[[int], None] | None = None,
     ) -> tuple[list[Message], CompactionReport | None]:
         usable = self.config.usable
         if usable is None and target_tokens is None:
@@ -120,6 +121,8 @@ class ContextBudget:
         else:
             target = target_tokens
 
+        if on_compacting is not None:
+            on_compacting(before)
         current = before
 
         def stub(pos: int) -> int:

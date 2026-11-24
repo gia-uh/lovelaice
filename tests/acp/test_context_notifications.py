@@ -3,7 +3,9 @@ from lingo.llm import Usage
 
 from lovelaice.acp.server import AcpServer
 from lovelaice.agent.budget import CompactionReport
-from lovelaice.agent.events import ContextCompacted, ContextOverflow, ContextOverheadWarning
+from lovelaice.agent.events import (
+    ContextCompacted, ContextCompacting, ContextMeasured, ContextOverflow, ContextOverheadWarning,
+)
 
 
 def notifications_for(ev):
@@ -26,6 +28,18 @@ def test_context_compacted_shape():
         "fixed_tokens": 6100, "stubbed": 8, "turns_summarized": 5, "clipped": 0,
         "summary": "S",
     }
+
+
+def test_live_context_notifications():
+    assert notifications_for(ContextCompacting(prompt_tokens=9000, window=12000)) == [
+        ("session/update", {"sessionId": "sid1", "sessionUpdate": "context",
+                            "event": "compacting", "prompt_tokens": 9000, "window": 12000}),
+    ]
+    assert notifications_for(ContextMeasured(prompt_tokens=4000, window=None, estimated=True)) == [
+        ("session/update", {"sessionId": "sid1", "sessionUpdate": "context",
+                            "event": "measured", "prompt_tokens": 4000,
+                            "window": None, "estimated": True}),
+    ]
 
 
 def test_context_warning_shape():
