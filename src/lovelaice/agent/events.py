@@ -78,6 +78,19 @@ class SessionAppend(AgentEvent):
 
 
 @dataclass
+class ContextMeasured(AgentEvent):
+    prompt_tokens: int
+    window: int | None
+    estimated: bool
+
+
+@dataclass
+class ContextCompacting(AgentEvent):
+    prompt_tokens: int
+    window: int | None
+
+
+@dataclass
 class ContextCompacted(AgentEvent):
     """The view sent to the model was cut down. `report` is a
     lovelaice.agent.budget.CompactionReport."""

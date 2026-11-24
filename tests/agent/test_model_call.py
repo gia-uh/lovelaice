@@ -8,7 +8,9 @@ from lingo.tools import tool as lingo_tool
 from lovelaice.agent import Agent, AgentConfig
 from lovelaice.agent.compaction import check_tool_pairs, fixed_chars, view_chars
 from lovelaice.agent.errors import StopReason
-from lovelaice.agent.events import ContextCompacted, ContextOverflow, ContextOverheadWarning
+from lovelaice.agent.events import (
+    ContextCompacted, ContextCompacting, ContextMeasured, ContextOverflow, ContextOverheadWarning,
+)
 from lovelaice.agent.loops.react_native import ReActNative
 from lovelaice.agent.tools import AgentTool
 
@@ -158,7 +160,12 @@ async def test_compacted_view_has_no_orphans(tmp_path, monkeypatch):
     agent, events = make_agent(tmp_path, monkeypatch, llm)
     seed(agent, [8000, 8000, 8000])
     assert await agent.prompt("long research") == StopReason.END_TURN
-    assert [e for e in events if isinstance(e, ContextCompacted)]
+    telemetry = [e for e in events if isinstance(e, (ContextCompacting, ContextCompacted, ContextMeasured))]
+    starting, compacted, measured = telemetry[:3]
+    assert starting == ContextCompacting(prompt_tokens=compacted.report.before_tokens, window=8192)
+    assert measured == ContextMeasured(
+        prompt_tokens=compacted.report.after_tokens, window=8192, estimated=True)
+    assert measured.prompt_tokens < starting.prompt_tokens
     for call in llm.calls:
         check_tool_pairs(call.messages)
         assert est(agent, call) <= 0.75 * 6144 + 2100   # at most one new batch over the line
@@ -181,8 +188,11 @@ async def test_provider_prompt_tokens_calibrate_the_estimate(tmp_path, monkeypat
     reply = Message.assistant("ok", stop_reason="stop")
     reply.usage = Usage(prompt_tokens=1234, completion_tokens=2, total_tokens=1236)
     llm = ScriptedLLM([reply])
-    agent, _ = make_agent(tmp_path, monkeypatch, llm)
+    agent, events = make_agent(tmp_path, monkeypatch, llm)
     await agent.prompt("hi")
+    estimate, measured = [e for e in events if isinstance(e, ContextMeasured)]
+    assert estimate.estimated is True
+    assert measured == ContextMeasured(prompt_tokens=1234, window=8192, estimated=False)
     st = agent.session.compaction
     assert st.last_prompt_tokens == 1234
     assert st.last_view_chars == (fixed_chars(agent.harness.system_prompt, llm.calls[0].tools)

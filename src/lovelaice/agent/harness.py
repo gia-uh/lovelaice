@@ -108,7 +108,10 @@ class Harness:
         ContextOverflowError; any other provider error propagates unchanged.
         """
         import math
-        from lovelaice.agent.compaction import CHARS_PER_TOKEN, fixed_chars, view_chars
+        from lovelaice.agent.compaction import (
+            CHARS_PER_TOKEN, estimate_tokens, fixed_chars, view_chars,
+        )
+        from lovelaice.agent.events import ContextCompacting, ContextMeasured
         from lovelaice.agent.errors import ContextOverflowError
         from lovelaice.agent.overflow import context_error_tokens, context_error_window
 
@@ -118,12 +121,20 @@ class Harness:
         state = session.compaction
         fixed = fixed_chars(self.system_prompt, tools)
 
+        window = self.budget.config.window
+
+        def announce_compacting(tokens: int) -> None:
+            self.emit(ContextCompacting(prompt_tokens=tokens, window=window))
+
         async def prepare(target_tokens=None):
             view, report = await self.budget.prepare(
                 system_prompt=self.system_prompt, tools=tools, history=history,
                 turns=turns, current_turn=current_turn, state=state,
-                summarize=self.summarizer(), target_tokens=target_tokens)
+                summarize=self.summarizer(), target_tokens=target_tokens,
+                on_compacting=announce_compacting)
             self._announce(report)
+            tokens = report.after_tokens if report else estimate_tokens(fixed + view_chars(view), state)
+            self.emit(ContextMeasured(prompt_tokens=tokens, window=window, estimated=True))
             return view, report
 
         view, report = await prepare()
@@ -160,6 +171,8 @@ class Harness:
         if usage is not None and getattr(usage, "prompt_tokens", 0):
             state.last_prompt_tokens = usage.prompt_tokens
             state.last_view_chars = fixed + view_chars(view)
+            self.emit(ContextMeasured(
+                prompt_tokens=usage.prompt_tokens, window=window, estimated=False))
         session.save_compaction()
         return assistant
 

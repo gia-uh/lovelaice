@@ -20,7 +20,7 @@ from lovelaice.acp.protocol import (
 )
 from lovelaice.agent.events import (
     AssistantMessageFinalized, ToolExecutionStart, ToolExecutionEnd,
-    ContextCompacted, ContextOverheadWarning, ContextOverflow,
+    ContextCompacted, ContextCompacting, ContextMeasured, ContextOverheadWarning, ContextOverflow,
 )
 
 
@@ -114,6 +114,17 @@ class AcpServer:
             })
         # `context` is additive (2.14.0), like `usage` in 2.12.0: warden speaks
         # only this dialect and needs to show compaction and overflow.
+        elif isinstance(ev, (ContextMeasured, ContextCompacting)):
+            payload = {
+                "sessionId": sid,
+                "sessionUpdate": "context",
+                "event": "measured" if isinstance(ev, ContextMeasured) else "compacting",
+                "prompt_tokens": ev.prompt_tokens,
+                "window": ev.window,
+            }
+            if isinstance(ev, ContextMeasured):
+                payload["estimated"] = ev.estimated
+            self._notify("session/update", payload)
         elif isinstance(ev, ContextCompacted):
             r = ev.report
             self._notify("session/update", {
