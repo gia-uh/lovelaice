@@ -1,3 +1,11 @@
+## 2.16.0 — 2026-11-24
+
+### Added
+
+- Legacy ACP context updates report prompt occupancy and the model window
+  during model calls. A progress event signals the start of compaction,
+  and providers that report prompt usage can replace the initial estimate.
+
 ## 2.15.0 — 2026-11-20
 
 ### Added
