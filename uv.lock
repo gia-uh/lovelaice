@@ -103,7 +103,6 @@ dev = [
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "textual", specifier = ">=6.1.0" },
 ]
-docs = [{ name = "scriptorium", git = "https://github.com/apiad/scriptorium?tag=v0.14.0" }]
 
 [[package]]
 name = "certifi"
@@ -414,7 +413,7 @@ wheels = [
 
 [[package]]
 name = "lovelaice"
-version = "2.16.0"
+version = "2.17.0"
 source = { editable = "." }
 dependencies = [
     { name = "agent-client-protocol" },
