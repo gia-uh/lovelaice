@@ -1,8 +1,8 @@
 """Compaction state and the view sent to the model.
 
 The stored conversation is never edited. What the model sees is a view: the
-system prompt plus the history, with old tool results replaced by stubs, one
-oversized message clipped, and old turns folded into a summary. The view is a
+system prompt plus the history, with tool results and batches replaced, old text clipped, and old turns
+folded into a summary. The view is a
 pure function of the history and a `CompactionState`, and the state only grows,
 so the start of the prompt changes only when compaction runs.
 """
@@ -17,8 +17,7 @@ from pydantic import BaseModel, Field
 
 CHARS_PER_TOKEN = 4
 
-STUB = ("[result elided to save context: {call}, {tokens:,} tokens. "
-        "Call the tool again if you need it.]")
+STUB = "[result elided to save context: {call}, {tokens:,} tokens{reference}.]"
 CLIP_MARKER = "\n[… {tokens:,} tokens removed to save context …]\n"
 SUMMARY_FOOTER = "\n[End of summary]\n\n"
 STUB_ARGS_CHARS = 120
@@ -34,7 +33,10 @@ class Summary(BaseModel):
 
 
 class CompactionState(BaseModel):
+    policy_key: str | None = None
+    history_length: int = 0
     stubbed: list[int] = Field(default_factory=list)
+    batches: dict[int, int] = Field(default_factory=dict)  # first position -> exclusive end
     clipped: dict[int, int] = Field(default_factory=dict)  # position -> tokens removed
     summary: Summary | None = None
     last_prompt_tokens: int | None = None
@@ -93,49 +95,100 @@ def _args_text(arguments: dict) -> str:
     return text
 
 
-def stub_text(call: ToolCall, tokens: int) -> str:
-    return STUB.format(call=f"{call.name}({_args_text(call.arguments)})", tokens=tokens)
+def history_reference(position: int) -> str:
+    """One-based position in the append-only conversation transcript."""
+    return f"history message {position + 1}"
 
 
-def clip_text(content: str, tokens_removed: int) -> str:
+def stub_text(call: ToolCall, tokens: int, position: int | None = None) -> str:
+    reference = "" if position is None else f"; original: {history_reference(position)}"
+    return STUB.format(call=f"{call.name}({_args_text(call.arguments)})",
+                       tokens=tokens, reference=reference)
+
+
+def batch_text(calls: list[ToolCall], start: int, end: int) -> str:
+    names = ", ".join(dict.fromkeys(call.name for call in calls))
+    return (f"[tool batch elided: {names}; original: "
+            f"{history_reference(start)}–{end}.]")
+
+
+def clip_text(content: str, tokens_removed: int, position: int | None = None) -> str:
     keep = max(0, len(content) - tokens_removed * CHARS_PER_TOKEN)
     head = keep - keep // 2
     tail = keep // 2
-    return (content[:head] + CLIP_MARKER.format(tokens=tokens_removed)
-            + (content[len(content) - tail:] if tail else ""))
+    marker = CLIP_MARKER.format(tokens=tokens_removed)
+    if position is not None:
+        marker += f"[original: {history_reference(position)}]\n"
+    return content[:head] + marker + (content[-tail:] if tail else "")
 
 
 def summary_header(turns_covered: int) -> str:
     return f"[Summary of the earlier conversation, turns 1–{turns_covered}]\n"
 
 
-def _calls_by_id(history: list[Message]) -> dict[str, ToolCall]:
-    return {tc.id: tc for m in history for tc in (m.tool_calls or [])}
+def tool_batches(history: list[Message], first: int = 0):
+    """Yield complete, contiguous OpenAI tool-call groups in source order."""
+    for start in range(first, len(history)):
+        message = history[start]
+        calls = message.tool_calls
+        if message.role != "assistant" or not calls:
+            continue
+        end = start + len(calls) + 1
+        results = history[start + 1:end]
+        expected = {call.id for call in calls}
+        if (len(expected) == len(results) == len(calls)
+                and all(result.role == "tool" for result in results)
+                and {result.tool_call_id for result in results} == expected):
+            yield start, end, {call.id: call for call in calls}
 
 
 def render_view(system_prompt: str, history: list[Message],
                 state: CompactionState) -> list[Message]:
     """System prompt plus the history as the state says the model sees it."""
-    calls = _calls_by_id(history) if state.stubbed else {}
-    stubbed = set(state.stubbed)
     start = state.summary.covers_through if state.summary else 0
+    stubbed = set(state.stubbed)
+    calls = {
+        pos: calls[history[pos].tool_call_id]
+        for pos_start, end, calls in tool_batches(history, start)
+        for pos in range(pos_start + 1, end)
+        if pos in stubbed
+    } if stubbed else {}
     out = [Message.system(system_prompt)]
-    for pos in range(start, len(history)):
+    pending: list[str] = []
+    pos = start
+    while pos < len(history):
         m = history[pos]
         content = m.content
+        if end := state.batches.get(pos):
+            pending.extend(filter(None, (
+                _content_text(m), batch_text(m.tool_calls or [], pos, end),
+            )))
+            pos = end
+            continue
         if pos in stubbed and m.role == "tool":
-            call = calls.get(m.tool_call_id or "")
+            call = calls.get(pos)
             tokens = math.ceil(len(_content_text(m)) / CHARS_PER_TOKEN)
-            content = (stub_text(call, tokens) if call is not None
-                       else STUB.format(call="tool", tokens=tokens))
+            content = (stub_text(call, tokens, pos) if call is not None
+                       else STUB.format(call="tool", tokens=tokens,
+                                        reference=f"; original: {history_reference(pos)}"))
         elif pos in state.clipped:
-            content = clip_text(_content_text(m), state.clipped[pos])
+            content = clip_text(_content_text(m), state.clipped[pos], pos)
         if pos == start and state.summary is not None:
-            text = content if isinstance(content, str) else _content_text(m)
             content = (summary_header(state.summary.turns_covered)
-                       + state.summary.text + SUMMARY_FOOTER + text)
+                       + state.summary.text + SUMMARY_FOOTER
+                       + (content if isinstance(content, str) else _content_text(m)))
+        if pending:
+            if m.role == "assistant":
+                text = content if isinstance(content, str) else _content_text(m)
+                content = "\n".join([*pending, text] if text else pending)
+            else:
+                out.append(Message.assistant("\n".join(pending)))
+            pending.clear()
         out.append(m.model_copy(update={"content": content}) if content is not m.content
                    else m)
+        pos += 1
+    if pending:
+        out.append(Message.assistant("\n".join(pending)))
     return out
 
 

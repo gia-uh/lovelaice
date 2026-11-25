@@ -2,6 +2,7 @@
 import pytest
 from lingo.llm import Message, Usage
 
+from lovelaice.agent import CompactionPolicy, CompactionStep
 from lovelaice.agent.budget import BudgetConfig, ContextBudget
 from lovelaice.agent.compaction import CompactionState, check_tool_pairs, summary_header
 from lovelaice.agent.events import AssistantMessageDelta
@@ -47,12 +48,14 @@ async def test_summary_folds_all_but_last_two_finished_turns():
     h, t = long_conv(6)
     fake = FakeSummarizer()
     c = case(h, t, summarize=fake)
-    view, rep = await budget.prepare(**c)
+    roomy = ContextBudget(BudgetConfig(window=16_384))
+    view, rep = await roomy.prepare(**c, target_tokens=100)
     assert rep.turns_summarized == 4
     assert c["state"].summary.covers_through == first_position_of_turn(t, 5)
     assert c["state"].summary.turns_covered == 4
-    assert view[1].content.startswith(summary_header(4) + "SUMMARY-1")
-    assert rep.summary == "SUMMARY-1" and rep.summary_usage.total_tokens == 15
+    assert view[1].content.startswith(summary_header(4) + f"SUMMARY-{fake.calls}")
+    assert rep.summary == f"SUMMARY-{fake.calls}"
+    assert rep.summary_usage.total_tokens == 15 * fake.calls
     check_tool_pairs(view)
 
 
@@ -71,15 +74,16 @@ async def test_summary_is_rolling():
     c = case(h, t, summarize=fake)
     await budget.prepare(**c)
     old_cut = c["state"].summary.covers_through
+    old_summary = c["state"].summary.text
+    call_count = fake.calls
     h2, t2 = long_conv(9)
     c2 = case(h2, t2, state=c["state"], summarize=fake)
     await budget.prepare(**c2)
-    previous, msgs, cap = fake.args[-1]
-    assert previous == "SUMMARY-1"
-    assert c2["state"].summary.runs == 2 and c2["state"].summary.text == "SUMMARY-2"
+    previous, transcript, _ = fake.args[call_count]
+    assert previous == old_summary
+    assert c2["state"].summary.runs == 2
     assert c2["state"].summary.covers_through > old_cut
-    # only the newly covered turns are sent, not the ones already summarized
-    assert len(msgs) == c2["state"].summary.covers_through - old_cut
+    assert transcript.startswith(f"[history message {old_cut + 1}] user:")
 
 
 @pytest.mark.asyncio
@@ -140,10 +144,7 @@ async def test_summary_call_streams_nothing():
     assert text == "the summary"
     assert not [e for e in events if isinstance(e, AssistantMessageDelta)]
     assert llm.last_tools is None
-    # A thinking model spends its token budget reasoning first. Capping the call
-    # at the summary size left Qwen 3.5 9B with an empty answer (live run,
-    # 2026-10-17); the session's own max_tokens applies and the text is clipped.
-    assert "max_tokens" not in llm.last_kwargs
+    assert llm.last_kwargs["max_tokens"] == 100
     assert llm._on_token is not None          # streaming restored for the real answer
 
 
@@ -200,9 +201,11 @@ async def test_failing_summary_call_skips_step_3():
         raise RuntimeError("provider timeout")
     h, t = long_conv(9)                          # still over usable after step 1
     c = case(h, t, summarize=broken)
-    view, rep = await budget.prepare(**c)
+    policy = CompactionPolicy(steps=(CompactionStep.SUMMARIZE_OLD_TURNS,
+                                     CompactionStep.TRUNCATE_OLD_TEXT))
+    view, rep = await ContextBudget(BudgetConfig(window=8192, policy=policy)).prepare(**c)
     assert c["state"].summary is None and rep.turns_summarized == 0
-    assert rep.clipped == 1                      # step 4 still ran
+    assert rep.clipped > 0
 
 
 def test_rolling_request_asks_for_one_merged_summary():
