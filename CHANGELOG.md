@@ -1,3 +1,21 @@
+## 2.17.0 — 2026-11-25
+
+### Added
+
+- Embedding hosts can set a validated context compaction policy with activation and
+  target percentages, an ordered list of operations, and protected recent turns.
+- Legacy ACP emits operation counts, approximate before and after sizes, and details
+  about rejected prompts.
+
+### Fixed
+
+- Summaries read original history in bounded requests. The current user message and
+  unread tool results stay visible.
+- Context retries respect a smaller provider limit and send only a smaller request.
+  Rejected attempts leave the last accepted compaction state intact.
+- Reopening a conversation under a different policy rebuilds the view from its
+  original messages.
+
 ## 2.16.0 — 2026-11-24
 
 ### Added
