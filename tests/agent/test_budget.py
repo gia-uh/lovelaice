@@ -7,6 +7,7 @@ import json
 import pytest
 from lingo.llm import Message, ToolCall
 
+from lovelaice.agent import CompactionPolicy, CompactionStep
 from lovelaice.agent.budget import BudgetConfig, ContextBudget
 from lovelaice.agent.compaction import CompactionState, check_tool_pairs, render_view
 from lovelaice.agent.loops.react_native import ReActNative
@@ -116,12 +117,13 @@ async def test_step2_keeps_latest_batch():
 
 
 @pytest.mark.asyncio
-async def test_clip_reaches_into_latest_batch():
-    h, t = conv([48_000])
-    c = case(h, t)
-    view, rep = await budget.prepare(**c)
-    assert rep.clipped == 1 and rep.after_tokens <= 3072
-    assert "tokens removed to save context" in view[-1].content
+async def test_latest_unread_batch_is_not_clipped_even_with_emergency_clipping():
+    history, turns = conv([48_000])
+    policy = CompactionPolicy(steps=(CompactionStep.TRUNCATE_OLD_TEXT,))
+    view, report = await ContextBudget(BudgetConfig(window=8192, policy=policy)).prepare(
+        **case(history, turns), target_tokens=3000)
+    assert report.clipped == 0 and report.after_tokens > report.usable
+    assert view[-1] == history[-1]
     check_tool_pairs(view)
 
 
@@ -168,19 +170,19 @@ async def test_forced_target_runs_under_trigger():
 
 
 @pytest.mark.asyncio
-async def test_clip_picks_largest_message_as_rendered():
-    # An earlier 48k result was already clipped down; a new 48k result arrives.
-    h, t = conv([48_000])
-    c = case(h, t)
-    await budget.prepare(**c)
-    first = next(iter(c["state"].clipped))
-    h2 = h + [m for m in conv([48_000])[0][1:]]       # second batch, same turn
-    t2 = t + [t[-1]] * (len(h2) - len(h))
-    c2 = case(h2, t2, state=c["state"])
-    view, rep = await budget.prepare(**c2)
-    assert rep.clipped == 1
-    assert (len(h2) - 1) in c2["state"].clipped       # the new result, not `first`
-    assert rep.after_tokens <= 6144                   # one clip per run (spec §06)
+async def test_opt_in_clip_reduces_multiple_old_messages():
+    history, turns = conv(["answer"], ["answer"], ["answer"], ["answer"], [])
+    history[0] = Message.user("x" * 29_000)
+    history[2] = Message.user("y" * 29_000)
+    history[4] = Message.user("protected" * 4)
+    history[-1] = Message.user("current" * 4)
+    policy = CompactionPolicy(steps=(CompactionStep.TRUNCATE_OLD_TEXT,))
+    kwargs = case(history, turns)
+    view, report = await ContextBudget(BudgetConfig(window=8192, policy=policy)).prepare(**kwargs)
+    assert report.clipped == 2 and report.after_tokens <= report.usable
+    assert set(kwargs["state"].clipped) == {0, 2}
+    assert "history message 1" in view[1].content
+    assert view[5:] == history[4:]
 
 
 @pytest.mark.asyncio

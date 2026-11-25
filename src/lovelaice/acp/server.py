@@ -21,6 +21,7 @@ from lovelaice.acp.protocol import (
 from lovelaice.agent.events import (
     AssistantMessageFinalized, ToolExecutionStart, ToolExecutionEnd,
     ContextCompacted, ContextCompacting, ContextMeasured, ContextOverheadWarning, ContextOverflow,
+    ContextSummaryUsage,
 )
 
 
@@ -140,6 +141,22 @@ class AcpServer:
                 "clipped": r.clipped,
                 "summary": r.summary,
             })
+            if r.operations:
+                self._notify("session/update", {
+                    "sessionId": sid,
+                    "sessionUpdate": "context",
+                    "event": "compaction_detail",
+                    "before_tokens": r.before_tokens,
+                    "after_tokens": r.after_tokens,
+                    "window": r.window,
+                    "usable": r.usable,
+                    "fixed_tokens": r.fixed_tokens,
+                    "estimated": True,
+                    "operations": [
+                        {"step": step.value, "count": count}
+                        for step, count in r.operations.items()
+                    ],
+                })
             # The summary was a model call; report its cost like any other.
             if r.summary_usage is not None:
                 self._notify("session/update", {
@@ -147,6 +164,12 @@ class AcpServer:
                     "sessionUpdate": "usage",
                     "usage": r.summary_usage.model_dump(),
                 })
+        elif isinstance(ev, ContextSummaryUsage):
+            self._notify("session/update", {
+                "sessionId": sid,
+                "sessionUpdate": "usage",
+                "usage": ev.usage.model_dump(),
+            })
         elif isinstance(ev, ContextOverheadWarning):
             self._notify("session/update", {
                 "sessionId": sid,
@@ -165,6 +188,18 @@ class AcpServer:
                 "prompt_tokens": ev.prompt_tokens,
                 "message": ev.message,
             })
+            if ev.estimated is not None:
+                self._notify("session/update", {
+                    "sessionId": sid,
+                    "sessionUpdate": "context",
+                    "event": "overflow_detail",
+                    "window": ev.window,
+                    "usable": ev.usable,
+                    "fixed_tokens": ev.fixed_tokens,
+                    "prompt_tokens": ev.prompt_tokens,
+                    "attempted": list(ev.attempted),
+                    "estimated": ev.estimated,
+                })
 
     async def handle_request(self, req: JsonRpcRequest) -> JsonRpcResponse:
         """Dispatch one JSON-RPC request to the right handler."""

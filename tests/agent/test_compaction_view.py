@@ -58,9 +58,9 @@ def test_render_view_does_not_mutate_history(history_with_tools):
 
 def test_stub_form_exact():
     call = ToolCall(id="c1", name="web_fetch", arguments={"url": "https://example.org/report"})
-    assert stub_text(call, 12400) == (
+    assert stub_text(call, 12400, 4) == (
         '[result elided to save context: web_fetch(url="https://example.org/report"), '
-        '12,400 tokens. Call the tool again if you need it.]')
+        '12,400 tokens; original: history message 5.]')
 
 
 def test_stub_args_cut_to_120():

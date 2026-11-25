@@ -6,6 +6,8 @@ malformed trailing lines on load.
 """
 import hashlib
 import json
+import logging
+import tempfile
 import os
 import uuid
 from datetime import datetime, timezone
@@ -85,12 +87,35 @@ class Session:
         from lovelaice.agent.compaction import CompactionState
         self.path = path
         self._entries = entries
-        # Compaction state for this log. In memory only: JSONL sessions are
-        # short-lived (workflow agent nodes, one-shot CLI runs).
+        self._compaction_path = path.with_name(path.name + ".compaction.json")
         self.compaction = CompactionState()
+        if self._compaction_path.is_file():
+            try:
+                self.compaction = CompactionState.model_validate_json(
+                    self._compaction_path.read_bytes())
+            except (OSError, ValueError):
+                logging.getLogger(__name__).warning(
+                    "Could not load compaction for %s; rebuilding from the log", path)
 
     def save_compaction(self) -> None:
-        """Nothing to persist for a JSONL session; see __init__."""
+        """Write a replaceable checkpoint alongside the append-only log."""
+        state = self.compaction
+        if not (state.stubbed or state.clipped or state.batches or state.summary
+                or self._compaction_path.exists()):
+            return
+        temp = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=self.path.parent, delete=False) as file:
+                temp = Path(file.name)
+                file.write(state.model_dump_json().encode())
+                file.flush()
+                os.fsync(file.fileno())
+            temp.replace(self._compaction_path)
+        except OSError:
+            logging.getLogger(__name__).exception("Could not save the accepted compaction state")
+        finally:
+            if temp is not None:
+                temp.unlink(missing_ok=True)
 
     @classmethod
     def create(

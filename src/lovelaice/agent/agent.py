@@ -4,6 +4,8 @@ Wires AgentConfig + tools + loop + session. Hosts touch this class;
 everything below is harness + loop + lingo.
 """
 import asyncio
+import logging
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, TYPE_CHECKING
@@ -13,9 +15,12 @@ from lovelaice.agent.budget import BudgetConfig, ContextBudget
 from lovelaice.agent.events import AgentEvent
 from lovelaice.agent.harness import Harness
 from lovelaice.agent.hooks import HookRegistry
+from lovelaice.agent.policy import CompactionPolicy
 from lovelaice.agent.prompt import assemble_system_prompt
 from lovelaice.agent.session import Session
 from lovelaice.agent.tools import AgentTool, ToolRegistry
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from lovelaice.agent.conversation import Conversation, ConversationStore
@@ -47,15 +52,17 @@ class AgentConfig:
     # The model's context window in tokens. None (the default) keeps today's
     # behaviour: nothing is compacted unless the provider refuses a prompt.
     context_window: int | None = None
-    # Compaction runs above `trigger` of the usable window and cuts to `target`.
+    # Legacy fractional thresholds, used when no explicit policy is supplied.
     compaction_trigger: float = 0.75
     compaction_target: float = 0.5
+    compaction_policy: CompactionPolicy | None = None
 
 
 def _build_budget(cfg: AgentConfig) -> ContextBudget:
     return ContextBudget(BudgetConfig(
         window=cfg.context_window, max_tokens=cfg.max_tokens,
-        trigger=cfg.compaction_trigger, target=cfg.compaction_target, model=cfg.model))
+        trigger=cfg.compaction_trigger, target=cfg.compaction_target, model=cfg.model,
+        policy=cfg.compaction_policy, endpoint=cfg.base_url))
 
 
 def _build_llm(cfg: AgentConfig) -> LLM:
@@ -127,8 +134,7 @@ class Agent:
 
         The agent's message list is seeded from the conversation; every
         new message the loop appends is written back to the store as a
-        side effect (fire-and-forget asyncio task — durability is best-
-        effort but ordered, since each append is scheduled in turn order).
+        side effect in the adapter's ordered background write queue.
         """
         agent = cls.__new__(cls)
         agent.config = config
@@ -200,14 +206,16 @@ class _ConversationSessionAdapter:
     The agent loop calls `session.append(msg)` synchronously; this adapter
     appends to an in-memory list (the source of truth for the loop's next
     `messages_for_llm` call) and schedules a background persist into the
-    beaverdb store. Persistence is fire-and-forget — durability is best-
-    effort. See spec §11 for the failure model.
+    beaverdb store. One drain serializes the appends. Compaction waits for
+    that drain so its positions always refer to durable messages.
     """
 
     def __init__(self, conversation, store) -> None:
         from lovelaice.agent.conversation import _deserialise
         self._conversation = conversation
         self._store = store
+        self._pending_messages: deque[tuple[Message, int | None]] = deque()
+        self._writer: asyncio.Task | None = None
         self._messages: list[Message] = [
             _deserialise(m) for m in conversation.row.messages
         ]
@@ -215,15 +223,27 @@ class _ConversationSessionAdapter:
         from lovelaice.agent.compaction import CompactionState
         self.compaction = getattr(conversation, "compaction", None) or CompactionState()
 
-    def save_compaction(self) -> None:
-        """Persist the compaction state in the store's own dict, fire-and-forget
-        like `append`. A snapshot is saved, so later cuts cannot race the write."""
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
+    async def save_compaction(self) -> None:
+        """Save the accepted view only after its source messages are durable."""
+        if self._writer is not None:
+            await asyncio.shield(self._writer)
+        if self._pending_messages:
             return
-        asyncio.create_task(self._store.save_compaction(
-            self._conversation.id, self.compaction.model_copy(deep=True)))
+        try:
+            await self._store.save_compaction(
+                self._conversation.id, self.compaction.model_copy(deep=True))
+        except Exception:
+            log.exception("Could not save the accepted compaction state")
+
+    async def _drain_messages(self) -> None:
+        while self._pending_messages:
+            message, turn = self._pending_messages[0]
+            try:
+                await self._store.append(self._conversation.id, message, turn=turn)
+            except Exception:
+                log.exception("Could not append to the conversation; retaining the pending messages")
+                return
+            self._pending_messages.popleft()
 
     @property
     def turn_count(self) -> int:
@@ -251,8 +271,9 @@ class _ConversationSessionAdapter:
             # No event loop — adapter is being used outside async context
             # (test, REPL). Skip persistence; in-memory append is enough.
             return {}
-        asyncio.create_task(
-            self._store.append(self._conversation.id, msg, turn=turn))
+        self._pending_messages.append((msg.model_copy(deep=True), turn))
+        if self._writer is None or self._writer.done():
+            self._writer = asyncio.create_task(self._drain_messages())
         return {}
 
     def update_tool_call_args(self, call_id: str, new_args: dict) -> None:

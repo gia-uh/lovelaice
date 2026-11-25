@@ -67,6 +67,45 @@ config = Config(
 )
 ```
 
+## Context compaction for embedding hosts
+
+Set `AgentConfig.context_window` for proactive compaction. A
+`lovelaice.agent.CompactionPolicy` supplied as `AgentConfig.compaction_policy`
+sets thresholds and the ordered operations:
+
+```python
+from lovelaice.agent import AgentConfig, CompactionPolicy
+
+config = AgentConfig(
+    model="my-model",
+    context_window=8192,
+    compaction_policy=CompactionPolicy.model_validate({
+        "trigger_percent": 75,
+        "target_percent": 50,
+        "protected_turns": 2,
+        "steps": ["finished_results", "summarize_old_turns", "read_results"],
+    }),
+)
+```
+
+These defaults measure the space left for conversation after reserving room
+for the output, system instructions, and tool schemas. Add
+`finished_tool_batches` to replace complete closed-turn tool exchanges or
+`truncate_old_text` to clip old dialogue when there is still an overflow.
+Only listed operations run, in their listed order. The current user message
+and the unread tool batch are protected. Conversation storage retains the
+original messages. Reopening under a different policy rebuilds their
+projection. Existing fractional `AgentConfig.compaction_trigger` and
+`compaction_target` still apply when no explicit policy is supplied.
+
+On the legacy ACP session stream, `context` adds a `compaction_detail` event
+with an ordered list of `operations` (each has `step` and `count`), estimated
+`before_tokens` and `after_tokens`, `estimated`, `window`, `usable`, and
+`fixed_tokens`. Counts refer to results, turns, batches, or messages as
+appropriate to the step. The additive `overflow_detail` event reports the
+limit and size when available, `estimated`, and the ordered `attempted`
+step names. Keep reading `measured` for the provider-reported prompt count.
+
 ## License
 
 MIT.

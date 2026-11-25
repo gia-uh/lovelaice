@@ -80,7 +80,8 @@ class ReActNative:
             except ContextOverflowError as exc:
                 harness.emit(ContextOverflow(
                     message=exc.message, fixed_tokens=exc.fixed_tokens,
-                    usable=exc.usable, prompt_tokens=exc.prompt_tokens))
+                    usable=exc.usable, prompt_tokens=exc.prompt_tokens,
+                    window=exc.window, attempted=exc.attempted, estimated=exc.estimated))
                 harness.emit(TurnEnd(stop_reason=StopReason.REFUSAL,
                                      soft_terminate=False))
                 return StopReason.REFUSAL

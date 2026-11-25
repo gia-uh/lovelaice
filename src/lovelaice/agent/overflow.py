@@ -17,6 +17,11 @@ _PHRASES = (
     "context length",
     "context window",
     "too many tokens",
+    "input token limit",
+    "maximum input tokens",
+    "max input tokens",
+    "max_input_tokens",
+    "input_token_limit",
 )
 _PROMPT_PATTERNS = (
     re.compile(r"\((\d+) of text input"),        # OpenRouter
@@ -53,4 +58,22 @@ def context_error_tokens(exc: BaseException) -> tuple[bool, int | None]:
 
 def context_error_window(exc: BaseException) -> int | None:
     """The context window a context-length error names, if it names one."""
-    return _first_int(_WINDOW_PATTERNS, str(exc))
+    return _first_int(_WINDOW_PATTERNS, str(exc).lower())
+
+
+_INPUT_LIMIT_PATTERNS = (
+    re.compile(r"(?:maximum|max) input tokens(?: is|:| of)?\s*(\d+)"),
+    re.compile(r"input token limit(?: is|:| of)?\s*(\d+)"),
+    re.compile(r"(?:max_input_tokens|input_token_limit)'?\"?:\s*(\d+)"),
+)
+
+
+def context_error_input_limit(exc: BaseException) -> int | None:
+    """An explicit input-only limit (no output reserve should be subtracted)."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        for key in ("max_input_tokens", "input_token_limit"):
+            value = body.get(key)
+            if type(value) is int and value > 0:
+                return value
+    return _first_int(_INPUT_LIMIT_PATTERNS, str(exc).lower())

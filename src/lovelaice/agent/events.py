@@ -98,6 +98,12 @@ class ContextCompacted(AgentEvent):
 
 
 @dataclass
+class ContextSummaryUsage(AgentEvent):
+    """Usage from a summary attempt that left the view unchanged."""
+    usage: Any
+
+
+@dataclass
 class ContextOverheadWarning(AgentEvent):
     """The system prompt and tool schemas alone are over the usable window.
     The call is sent anyway; the provider decides."""
@@ -107,8 +113,11 @@ class ContextOverheadWarning(AgentEvent):
 
 @dataclass
 class ContextOverflow(AgentEvent):
-    """The provider refused the prompt even after compaction; the turn ends."""
+    """The provider refused the prompt and the enabled steps could not fit it."""
     message: str
     fixed_tokens: int
     usable: int | None
     prompt_tokens: int | None
+    window: int | None = None
+    attempted: tuple[str, ...] = ()
+    estimated: bool | None = None
